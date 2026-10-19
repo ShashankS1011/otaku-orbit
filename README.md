@@ -6,7 +6,7 @@
 
 **Made by Shashank — powered by Saiyan spirit**
 
-Current version: `1.1.1`
+Current version: `1.3.0`
 
 ## Deploy on Streamlit Community Cloud
 
@@ -49,14 +49,24 @@ streamlit run app.py
 
 The app opens at `http://localhost:8501`. Your watchlist is stored in `anime_companion.db` and is intentionally ignored by Git.
 
+For deployment, local SQLite storage is best for personal use and can be reset by an ephemeral hosting environment. Set `OTAKU_ORBIT_DB_PATH` to a persistent mounted path when your host provides one. The API endpoint, request timeout, retry count, and cache duration can be adjusted with `ANILIST_API_URL`, `OTAKU_ORBIT_REQUEST_TIMEOUT`, `OTAKU_ORBIT_REQUEST_ATTEMPTS`, and `OTAKU_ORBIT_CACHE_TTL`.
+
 ## Test and quality checks
 
 ```powershell
 python -m pytest -q
 python -m py_compile app.py
+python -m ruff check app.py tests
 ```
 
-GitHub Actions runs both checks for every push and pull request. The workflow is in [`.github/workflows/ci.yml`](.github/workflows/ci.yml).
+GitHub Actions runs tests, syntax checks, and Ruff for every push and pull request. The workflow is in [`.github/workflows/ci.yml`](.github/workflows/ci.yml).
+
+## Release checklist
+
+1. Update `APP_VERSION` in `app.py` using semantic versioning.
+2. Run the test, compile, and Ruff commands above.
+3. Update the current version in this README.
+4. Push a release branch and merge it through a passing pull request.
 
 ## Versioning
 
