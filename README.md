@@ -6,11 +6,11 @@
 
 **Made by Shashank — with the spirit of Plus Ultra ✦**
 
-## Launch the app
+## Use the app
 
-[Open Otaku Orbit](https://share.streamlit.io/ShashankS1011/otaku-orbit/main/app.py) · [View the source on GitHub](https://github.com/ShashankS1011/otaku-orbit)
+[The app currently runs locally with Streamlit](#run-locally)
 
-The launch link opens the Streamlit Community Cloud deployment flow. Once deployed, it becomes a direct one-click app for users.
+The previous Community Cloud link has been removed because it required a signed-in Streamlit deployment and did not point to a public app yet.
 
 ## What it does
 
