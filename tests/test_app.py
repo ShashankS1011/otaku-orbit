@@ -4,6 +4,12 @@ import requests
 import app
 
 
+def test_app_version_uses_semantic_versioning():
+    parts = app.APP_VERSION.split(".")
+    assert len(parts) == 3
+    assert all(part.isdigit() for part in parts)
+
+
 @pytest.fixture
 def isolated_db(tmp_path, monkeypatch):
     database = tmp_path / "test.db"
@@ -96,3 +102,26 @@ def test_anilist_query_retries_transient_request_error(monkeypatch):
     monkeypatch.setattr(app.time, "sleep", lambda _: None)
     assert app.anilist_query("retry-test-query") == [{"id": 1}]
     assert len(calls) == 2
+
+
+def test_fetch_anime_page_preserves_pagination_metadata(monkeypatch):
+    monkeypatch.setattr(app, "anilist_response", lambda *args, **kwargs: {
+        "Page": {"media": [{"id": 1}], "pageInfo": {"hasNextPage": True}}
+    })
+    results, has_next = app.fetch_anime_page("frieren", page=2)
+    assert results == [{"id": 1}]
+    assert has_next is True
+
+
+def test_load_with_fallback_returns_previous_session_result(monkeypatch):
+    app.st.session_state.clear()
+    result, from_cache = app.load_with_fallback("trending", lambda: ["cached later"])
+    assert result == ["cached later"]
+    assert from_cache is False
+
+    def unavailable():
+        raise requests.RequestException("offline")
+
+    result, from_cache = app.load_with_fallback("trending", unavailable)
+    assert result == ["cached later"]
+    assert from_cache is True
