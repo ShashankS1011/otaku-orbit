@@ -15,6 +15,7 @@ The previous Community Cloud link has been removed because it required a signed-
 ## What it does
 
 - Search AniList's anime catalogue with fast cached GraphQL requests
+- Browse search pages, open full anime details, and use a random discovery prompt
 - Browse trending titles and the current seasonal lineup
 - Filter results by genre, format, score, and mature-content preference
 - Get recommendations based on the genres in your watchlist
@@ -23,6 +24,8 @@ The previous Community Cloud link has been removed because it required a signed-
 - Track episode progress and estimate watch time
 - Continue watching view plus search and status filters for your library
 - Export and restore your watchlist as a portable JSON backup
+- Set a daily episode goal and see upcoming airing reminders
+- Choose compact cards or light mode for a more comfortable layout
 - Explore a personal genre profile with lightweight charts
 - Stay resilient with cached requests, retries, and clear API error states
 

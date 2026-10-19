@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import sqlite3
 import json
+import random
 import time
 from datetime import date, datetime
 from pathlib import Path
@@ -34,6 +35,19 @@ query ($search: String, $season: MediaSeason, $seasonYear: Int, $page: Int) {
 }
 """
 
+DETAIL_QUERY = """
+query ($id: Int) {
+  Media(id: $id, type: ANIME) {
+    id title { romaji english native } coverImage { large }
+    description(asHtml: false) episodes duration status averageScore genres
+    season seasonYear format isAdult nextAiringEpisode { airingAt episode }
+    studios(isMain: true) { nodes { name } }
+    characters(sort: ROLE, perPage: 8) { nodes { name { full } } }
+    staff(sort: RELEVANCE, perPage: 8) { nodes { name { full } primaryOccupations } }
+  }
+}
+"""
+
 TRENDING_QUERY = """
 query { Page(page: 1, perPage: 24) {
   media(type: ANIME, sort: TRENDING_DESC) {
@@ -51,8 +65,14 @@ def init_db() -> None:
         connection.execute("""CREATE TABLE IF NOT EXISTS watchlist (
             anime_id INTEGER PRIMARY KEY, title TEXT NOT NULL, image TEXT,
             status TEXT NOT NULL DEFAULT 'PLANNING', progress INTEGER NOT NULL DEFAULT 0,
-            episodes INTEGER, score INTEGER, genres TEXT, updated_at TEXT NOT NULL
+            episodes INTEGER, score INTEGER, genres TEXT, next_airing_at INTEGER,
+            next_airing_episode INTEGER, updated_at TEXT NOT NULL
         )""")
+        columns = {row[1] for row in connection.execute("PRAGMA table_info(watchlist)")}
+        if "next_airing_at" not in columns:
+            connection.execute("ALTER TABLE watchlist ADD COLUMN next_airing_at INTEGER")
+        if "next_airing_episode" not in columns:
+            connection.execute("ALTER TABLE watchlist ADD COLUMN next_airing_episode INTEGER")
 
 
 def db_rows() -> list[dict[str, Any]]:
@@ -65,13 +85,17 @@ def save_anime(anime: dict[str, Any], status: str = "PLANNING", progress: int = 
     title = display_title(anime)
     with sqlite3.connect(DB_PATH) as connection:
         connection.execute("""INSERT INTO watchlist
-            (anime_id, title, image, status, progress, episodes, score, genres, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            (anime_id, title, image, status, progress, episodes, score, genres,
+             next_airing_at, next_airing_episode, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(anime_id) DO UPDATE SET title=excluded.title, image=excluded.image,
             status=excluded.status, progress=excluded.progress, episodes=excluded.episodes,
-            score=excluded.score, genres=excluded.genres, updated_at=excluded.updated_at""",
+            score=excluded.score, genres=excluded.genres, next_airing_at=excluded.next_airing_at,
+            next_airing_episode=excluded.next_airing_episode, updated_at=excluded.updated_at""",
             (anime["id"], title, anime.get("coverImage", {}).get("large"), status, progress,
              anime.get("episodes"), anime.get("averageScore"), ", ".join(anime.get("genres", [])),
+             (anime.get("nextAiringEpisode") or {}).get("airingAt"),
+             (anime.get("nextAiringEpisode") or {}).get("episode"),
              datetime.now().isoformat(timespec="seconds")))
 
 
@@ -91,6 +115,8 @@ def export_watchlist(rows: list[dict[str, Any]]) -> str:
 
 
 def import_watchlist(payload: str) -> int:
+    if len(payload.encode("utf-8")) > 2_000_000:
+        raise ValueError("That backup is larger than the 2 MB safety limit.")
     imported = json.loads(payload)
     if not isinstance(imported, list):
         raise ValueError("A watchlist backup must contain a list of titles.")
@@ -100,15 +126,18 @@ def import_watchlist(payload: str) -> int:
             if not isinstance(row, dict) or not row.get("anime_id") or not row.get("title"):
                 continue
             connection.execute("""INSERT INTO watchlist
-                (anime_id, title, image, status, progress, episodes, score, genres, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                (anime_id, title, image, status, progress, episodes, score, genres,
+                 next_airing_at, next_airing_episode, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(anime_id) DO UPDATE SET title=excluded.title, image=excluded.image,
                 status=excluded.status, progress=excluded.progress, episodes=excluded.episodes,
-                score=excluded.score, genres=excluded.genres, updated_at=excluded.updated_at""",
+                score=excluded.score, genres=excluded.genres, next_airing_at=excluded.next_airing_at,
+                next_airing_episode=excluded.next_airing_episode, updated_at=excluded.updated_at""",
                 (int(row["anime_id"]), str(row["title"]), row.get("image"),
                  row.get("status", "PLANNING") if row.get("status") in WATCH_STATUSES else "PLANNING",
                  max(0, int(row.get("progress", 0))), row.get("episodes"), row.get("score"),
-                 row.get("genres", ""), row.get("updated_at", datetime.now().isoformat(timespec="seconds"))))
+                 row.get("genres", ""), row.get("next_airing_at"), row.get("next_airing_episode"),
+                 row.get("updated_at", datetime.now().isoformat(timespec="seconds"))))
             restored += 1
     return restored
 
@@ -124,7 +153,9 @@ def anilist_query(query: str, variables: dict[str, Any] | None = None) -> list[d
             response.raise_for_status()
             break
         except requests.RequestException:
-            if attempt == REQUEST_ATTEMPTS - 1:
+            status_code = getattr(response, "status_code", None)
+            retryable_status = status_code is None or status_code == 429 or status_code >= 500
+            if attempt == REQUEST_ATTEMPTS - 1 or not retryable_status:
                 raise
             time.sleep(0.35 * (2 ** attempt))
     if response is None:
@@ -133,11 +164,20 @@ def anilist_query(query: str, variables: dict[str, Any] | None = None) -> list[d
     if payload.get("errors"):
         raise RuntimeError(payload["errors"][0].get("message", "AniList returned an error"))
     data = payload.get("data", {})
+    if data.get("Media"):
+        return [data["Media"]]
     return data.get("Page", {}).get("media", [])
 
 
-def fetch_anime(search: str = "", season: str | None = None, year: int | None = None) -> list[dict[str, Any]]:
-    variables: dict[str, Any] = {"search": search or None, "page": 1}
+@st.cache_data(ttl=3600, show_spinner=False)
+def fetch_anime_detail(anime_id: int) -> dict[str, Any] | None:
+    payload = anilist_query(DETAIL_QUERY, {"id": anime_id})
+    return payload[0] if payload else None
+
+
+def fetch_anime(search: str = "", season: str | None = None, year: int | None = None,
+                page: int = 1) -> list[dict[str, Any]]:
+    variables: dict[str, Any] = {"search": search or None, "page": page}
     if season:
         variables["season"], variables["seasonYear"] = season, year
     return anilist_query(SEARCH_QUERY, variables)
@@ -193,9 +233,44 @@ def format_airing(anime: dict[str, Any]) -> str:
     return f"Episode {airing['episode']} · {when}"
 
 
+def format_row_airing(row: dict[str, Any]) -> str | None:
+    if not row.get("next_airing_at"):
+        return None
+    when = datetime.fromtimestamp(row["next_airing_at"]).strftime("%d %b, %H:%M")
+    return f"Episode {row.get('next_airing_episode', '?')} · {when}"
+
+
+@st.dialog("Anime details")
+def show_anime_details(anime_id: int) -> None:
+    try:
+        anime = fetch_anime_detail(anime_id)
+    except (requests.RequestException, RuntimeError) as error:
+        st.error(f"Could not load details: {error}")
+        return
+    if not anime:
+        st.info("No details were found for this title.")
+        return
+    st.subheader(display_title(anime))
+    if anime.get("coverImage", {}).get("large"):
+        st.image(anime["coverImage"]["large"], width=220)
+    st.caption(f"{anime.get('format', 'ANIME')} · {anime.get('status', 'UNKNOWN')} · {anime.get('averageScore') or '—'}/100")
+    st.write(clean_description(anime.get("description")))
+    st.write(f"**Episodes:** {anime.get('episodes') or 'Unknown'} · **Duration:** {anime.get('duration') or 'Unknown'} min")
+    studios = [studio["name"] for studio in anime.get("studios", {}).get("nodes", [])]
+    if studios:
+        st.write("**Studio:** " + ", ".join(studios))
+    characters = [item["name"]["full"] for item in anime.get("characters", {}).get("nodes", [])]
+    if characters:
+        st.caption("Characters: " + ", ".join(characters))
+    staff = [item["name"]["full"] for item in anime.get("staff", {}).get("nodes", [])]
+    if staff:
+        st.caption("Staff: " + ", ".join(staff))
+
+
 def render_card(anime: dict[str, Any], saved_ids: set[int], key_prefix: str) -> None:
     title = display_title(anime)
-    image, details = st.columns([1, 2.2], gap="medium")
+    compact = st.session_state.get("compact_cards", False)
+    image, details = st.columns([0.7, 2.5] if compact else [1, 2.2], gap="medium")
     with image:
         if anime.get("coverImage", {}).get("large"):
             st.image(anime["coverImage"]["large"], use_container_width=True)
@@ -210,6 +285,8 @@ def render_card(anime: dict[str, Any], saved_ids: set[int], key_prefix: str) -> 
             st.caption(" · ".join(genres))
         if anime.get("nextAiringEpisode"):
             st.info(format_airing(anime))
+        if st.button("Details", key=f"details-{key_prefix}-{anime['id']}", use_container_width=True):
+            show_anime_details(anime["id"])
         if anime["id"] in saved_ids:
             st.success("In your watchlist")
         else:
@@ -229,15 +306,30 @@ def render_watchlist() -> None:
     for column, (label, value) in zip(cols, counts.items()):
         column.metric(label.title(), value)
     st.divider()
+    sort_order = st.selectbox("Sort saved titles", ["Recently updated", "Title", "Score", "Progress"],
+                              key="watchlist-sort")
+    if sort_order == "Title":
+        rows.sort(key=lambda row: row["title"].lower())
+    elif sort_order == "Score":
+        rows.sort(key=lambda row: row["score"] or 0, reverse=True)
+    elif sort_order == "Progress":
+        rows.sort(key=lambda row: row["progress"], reverse=True)
     active = [row for row in rows if row["status"] == "WATCHING"]
+    goal = st.session_state.get("daily_goal", 3)
     if active:
         st.subheader("Continue watching")
-        st.caption("Your next episodes are always at the top of the orbit.")
+        st.caption(f"Your next episodes are always at the top of the orbit. Goal: {goal} episode(s) per day.")
         for row in active[:3]:
             total = row["episodes"] or 0
             progress = row["progress"]
             remaining = max(total - progress, 0) if total else "?"
             st.write(f"**{row['title']}** · episode {progress + 1} next · {remaining} remaining")
+        st.divider()
+    reminders = [(row["title"], format_row_airing(row)) for row in rows if format_row_airing(row)]
+    if reminders:
+        st.subheader("Upcoming airing reminders")
+        for title, airing in reminders[:5]:
+            st.info(f"**{title}** · {airing}")
         st.divider()
     st.subheader("All saved titles")
     search = st.text_input("Filter your watchlist", placeholder="Search saved titles…")
@@ -314,8 +406,8 @@ def render_recommendations(rows: list[dict[str, Any]], saved_ids: set[int]) -> N
     st.write("Based on the genres in your watchlist: " + ", ".join(sorted(preferred)) + ".")
     try:
         candidates = anilist_query(TRENDING_QUERY)
-    except requests.RequestException:
-        st.error("Could not load recommendations right now. Please try again shortly.")
+    except (requests.RequestException, RuntimeError) as error:
+        st.error(f"Could not load recommendations right now: {error}")
         return
     ranked = sorted(
         (anime for anime in candidates if anime["id"] not in saved_ids),
@@ -351,8 +443,18 @@ def main() -> None:
         page = st.radio("Navigate", ["Discover", "For you", "Seasonal", "Watchlist", "Statistics"], label_visibility="collapsed")
         st.divider()
         st.metric("Saved titles", len(rows))
+        st.session_state["daily_goal"] = st.number_input("Daily episode goal", min_value=1, max_value=20,
+                                                           value=st.session_state.get("daily_goal", 3))
+        st.session_state["compact_cards"] = st.toggle("Compact cards", value=st.session_state.get("compact_cards", False))
+        light_mode = st.toggle("Light mode", value=False)
         st.caption("Data is stored locally on this device.")
     st.markdown(f'<div class="orbit-credit">{AUTHOR_CREDIT}</div>', unsafe_allow_html=True)
+    if light_mode:
+        st.markdown("""<style>
+        [data-testid="stAppViewContainer"] {background: #f7f5fb; color: #201c2c;}
+        [data-testid="stSidebar"] {background: #eeeafa;}
+        .orbit-muted {color: #5d5870;}
+        </style>""", unsafe_allow_html=True)
 
     if page == "Watchlist":
         render_watchlist()
@@ -366,9 +468,10 @@ def main() -> None:
     if page == "Discover":
         st.markdown('<div class="orbit-hero"><div class="orbit-kicker">Anime discovery, upgraded</div><h1>Find your next obsession</h1><div class="orbit-muted">Search AniList, save what catches your eye, and let your watchlist become your personal anime map.</div></div>', unsafe_allow_html=True)
         query = st.text_input("Search anime", placeholder="Try Frieren, One Piece, Cowboy Bebop…")
+        page_number = st.number_input("Search page", min_value=1, max_value=20, value=1, step=1) if query else 1
         if query:
             try:
-                results = fetch_anime(query)
+                results = fetch_anime(query, page=int(page_number))
             except requests.RequestException:
                 st.error("AniList is unavailable right now. Check your connection and try again.")
                 results = []
@@ -382,6 +485,9 @@ def main() -> None:
             except requests.RequestException:
                 st.warning("AniList is unavailable. Search again when you are back online.")
                 results = []
+        if st.button("Surprise me", help="Show one random title from the current results") and results:
+            results = [random.choice(results)]
+            st.info("A little nudge from the anime universe ✦")
         results = render_filters(results, "discover")
         for anime in results:
             with st.container(border=True):
@@ -395,8 +501,8 @@ def main() -> None:
         st.write("Keep up with the shows everyone will be talking about this season.")
         try:
             results = fetch_anime(season=season, year=now.year)
-        except requests.RequestException:
-            st.error("Could not load the seasonal lineup. Please try again shortly.")
+        except (requests.RequestException, RuntimeError) as error:
+            st.error(f"Could not load the seasonal lineup: {error}")
             results = []
         results = render_filters(results, "seasonal")
         for anime in results:
