@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import sqlite3
+import json
+import time
 from datetime import date, datetime
 from pathlib import Path
 from typing import Any
@@ -13,6 +15,8 @@ APP_NAME = "Otaku Orbit"
 AUTHOR_CREDIT = "Made by Shashank — with the spirit of Plus Ultra ✦"
 API_URL = "https://graphql.anilist.co"
 DB_PATH = Path(__file__).with_name("anime_companion.db")
+REQUEST_ATTEMPTS = 3
+WATCH_STATUSES = ["WATCHING", "PLANNING", "COMPLETED", "DROPPED"]
 
 SEARCH_QUERY = """
 query ($search: String, $season: MediaSeason, $seasonYear: Int, $page: Int) {
@@ -22,7 +26,7 @@ query ($search: String, $season: MediaSeason, $seasonYear: Int, $page: Int) {
           type: ANIME, sort: POPULARITY_DESC) {
       id title { romaji english native } coverImage { large }
       description(asHtml: false) episodes duration status
-      averageScore genres season seasonYear format isAdult
+      averageScore popularity genres season seasonYear format isAdult
       nextAiringEpisode { airingAt episode }
       studios(isMain: true) { nodes { name } }
     }
@@ -34,7 +38,7 @@ TRENDING_QUERY = """
 query { Page(page: 1, perPage: 24) {
   media(type: ANIME, sort: TRENDING_DESC) {
     id title { romaji english native } coverImage { large }
-    description(asHtml: false) episodes duration status averageScore genres
+    description(asHtml: false) episodes duration status averageScore popularity genres
     season seasonYear format isAdult nextAiringEpisode { airingAt episode }
     studios(isMain: true) { nodes { name } }
   }
@@ -82,10 +86,49 @@ def remove_anime(anime_id: int) -> None:
         connection.execute("DELETE FROM watchlist WHERE anime_id=?", (anime_id,))
 
 
+def export_watchlist(rows: list[dict[str, Any]]) -> str:
+    return json.dumps(rows, indent=2, ensure_ascii=False)
+
+
+def import_watchlist(payload: str) -> int:
+    imported = json.loads(payload)
+    if not isinstance(imported, list):
+        raise ValueError("A watchlist backup must contain a list of titles.")
+    restored = 0
+    with sqlite3.connect(DB_PATH) as connection:
+        for row in imported:
+            if not isinstance(row, dict) or not row.get("anime_id") or not row.get("title"):
+                continue
+            connection.execute("""INSERT INTO watchlist
+                (anime_id, title, image, status, progress, episodes, score, genres, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(anime_id) DO UPDATE SET title=excluded.title, image=excluded.image,
+                status=excluded.status, progress=excluded.progress, episodes=excluded.episodes,
+                score=excluded.score, genres=excluded.genres, updated_at=excluded.updated_at""",
+                (int(row["anime_id"]), str(row["title"]), row.get("image"),
+                 row.get("status", "PLANNING") if row.get("status") in WATCH_STATUSES else "PLANNING",
+                 max(0, int(row.get("progress", 0))), row.get("episodes"), row.get("score"),
+                 row.get("genres", ""), row.get("updated_at", datetime.now().isoformat(timespec="seconds"))))
+            restored += 1
+    return restored
+
+
 @st.cache_data(ttl=900, show_spinner=False)
 def anilist_query(query: str, variables: dict[str, Any] | None = None) -> list[dict[str, Any]]:
-    response = requests.post(API_URL, json={"query": query, "variables": variables or {}}, timeout=15)
-    response.raise_for_status()
+    request_body = {"query": query, "variables": variables or {}}
+    response: requests.Response | None = None
+    for attempt in range(REQUEST_ATTEMPTS):
+        try:
+            response = requests.post(API_URL, json=request_body,
+                                     headers={"User-Agent": "OtakuOrbit/1.0"}, timeout=15)
+            response.raise_for_status()
+            break
+        except requests.RequestException:
+            if attempt == REQUEST_ATTEMPTS - 1:
+                raise
+            time.sleep(0.35 * (2 ** attempt))
+    if response is None:
+        raise requests.RequestException("AniList did not return a response")
     payload = response.json()
     if payload.get("errors"):
         raise RuntimeError(payload["errors"][0].get("message", "AniList returned an error"))
@@ -98,6 +141,37 @@ def fetch_anime(search: str = "", season: str | None = None, year: int | None = 
     if season:
         variables["season"], variables["seasonYear"] = season, year
     return anilist_query(SEARCH_QUERY, variables)
+
+
+def filter_anime(results: list[dict[str, Any]], genre: str = "All genres",
+                 format_name: str = "All formats", minimum_score: int = 0,
+                 include_adult: bool = False) -> list[dict[str, Any]]:
+    filtered = []
+    for anime in results:
+        if not include_adult and anime.get("isAdult"):
+            continue
+        if genre != "All genres" and genre not in anime.get("genres", []):
+            continue
+        if format_name != "All formats" and anime.get("format") != format_name:
+            continue
+        if (anime.get("averageScore") or 0) < minimum_score:
+            continue
+        filtered.append(anime)
+    return filtered
+
+
+def render_filters(results: list[dict[str, Any]], key_prefix: str) -> list[dict[str, Any]]:
+    genres = sorted({genre for anime in results for genre in anime.get("genres", [])})
+    formats = sorted({anime.get("format") for anime in results if anime.get("format")})
+    with st.expander("Filter results", expanded=False):
+        first, second, third, fourth = st.columns(4)
+        genre = first.selectbox("Genre", ["All genres", *genres], key=f"genre-{key_prefix}")
+        format_name = second.selectbox("Format", ["All formats", *formats], key=f"format-{key_prefix}")
+        minimum_score = third.slider("Minimum score", 0, 90, 0, 5, key=f"score-{key_prefix}")
+        include_adult = fourth.checkbox("Include mature titles", key=f"adult-{key_prefix}")
+    filtered = filter_anime(results, genre, format_name, minimum_score, include_adult)
+    st.caption(f"Showing {len(filtered)} of {len(results)} titles")
+    return filtered
 
 
 def display_title(anime: dict[str, Any]) -> str:
@@ -155,7 +229,23 @@ def render_watchlist() -> None:
     for column, (label, value) in zip(cols, counts.items()):
         column.metric(label.title(), value)
     st.divider()
-    for row in rows:
+    active = [row for row in rows if row["status"] == "WATCHING"]
+    if active:
+        st.subheader("Continue watching")
+        st.caption("Your next episodes are always at the top of the orbit.")
+        for row in active[:3]:
+            total = row["episodes"] or 0
+            progress = row["progress"]
+            remaining = max(total - progress, 0) if total else "?"
+            st.write(f"**{row['title']}** · episode {progress + 1} next · {remaining} remaining")
+        st.divider()
+    st.subheader("All saved titles")
+    search = st.text_input("Filter your watchlist", placeholder="Search saved titles…")
+    status_filter = st.selectbox("Status", ["All statuses", *WATCH_STATUSES])
+    visible_rows = [row for row in rows
+                    if (not search or search.lower() in row["title"].lower())
+                    and (status_filter == "All statuses" or row["status"] == status_filter)]
+    for row in visible_rows:
         left, right = st.columns([3, 2])
         with left:
             st.subheader(row["title"])
@@ -164,8 +254,8 @@ def render_watchlist() -> None:
             st.progress(min(progress / total, 1.0) if total else 0.0, text=f"Episode {progress}/{total or '?'}")
             st.caption(f"Score: {row['score'] or '—'}  ·  {row['genres'] or 'Genre unknown'}")
         with right:
-            status = st.selectbox("Status", ["WATCHING", "PLANNING", "COMPLETED", "DROPPED"],
-                                  index=["WATCHING", "PLANNING", "COMPLETED", "DROPPED"].index(row["status"]),
+            status = st.selectbox("Status", WATCH_STATUSES,
+                                  index=WATCH_STATUSES.index(row["status"]),
                                   key=f"status-{row['anime_id']}")
             new_progress = st.number_input("Episodes watched", min_value=0, max_value=row["episodes"] or 9999,
                                            value=row["progress"], key=f"progress-{row['anime_id']}")
@@ -177,6 +267,20 @@ def render_watchlist() -> None:
                 remove_anime(row["anime_id"])
                 st.rerun()
         st.divider()
+    if not visible_rows:
+        st.info("No saved titles match those filters.")
+    with st.expander("Backup your watchlist"):
+        st.caption("Export a portable JSON backup or restore one on another device.")
+        st.download_button("Download backup", export_watchlist(rows), "otaku-orbit-watchlist.json",
+                           "application/json", use_container_width=True)
+        uploaded = st.file_uploader("Restore JSON backup", type="json")
+        if uploaded is not None and st.button("Restore backup", use_container_width=True):
+            try:
+                count = import_watchlist(uploaded.getvalue().decode("utf-8"))
+                st.success(f"Restored {count} title(s).")
+                st.rerun()
+            except (UnicodeDecodeError, ValueError, json.JSONDecodeError) as error:
+                st.error(f"Could not restore that backup: {error}")
 
 
 def render_stats(rows: list[dict[str, Any]]) -> None:
@@ -215,7 +319,8 @@ def render_recommendations(rows: list[dict[str, Any]], saved_ids: set[int]) -> N
         return
     ranked = sorted(
         (anime for anime in candidates if anime["id"] not in saved_ids),
-        key=lambda anime: (len(preferred.intersection(anime.get("genres", []))), anime.get("averageScore") or 0),
+        key=lambda anime: (len(preferred.intersection(anime.get("genres", []))),
+                           anime.get("averageScore") or 0, anime.get("popularity") or 0),
         reverse=True,
     )
     for anime in ranked[:8]:
@@ -264,7 +369,6 @@ def main() -> None:
         if query:
             try:
                 results = fetch_anime(query)
-                st.caption(f"{len(results)} results from AniList")
             except requests.RequestException:
                 st.error("AniList is unavailable right now. Check your connection and try again.")
                 results = []
@@ -278,6 +382,7 @@ def main() -> None:
             except requests.RequestException:
                 st.warning("AniList is unavailable. Search again when you are back online.")
                 results = []
+        results = render_filters(results, "discover")
         for anime in results:
             with st.container(border=True):
                 render_card(anime, saved_ids, "discover")
@@ -293,6 +398,7 @@ def main() -> None:
         except requests.RequestException:
             st.error("Could not load the seasonal lineup. Please try again shortly.")
             results = []
+        results = render_filters(results, "seasonal")
         for anime in results:
             with st.container(border=True):
                 render_card(anime, saved_ids, "seasonal")
