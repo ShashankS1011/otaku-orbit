@@ -1,3 +1,5 @@
+import sqlite3
+
 import pytest
 import requests
 
@@ -125,3 +127,23 @@ def test_load_with_fallback_returns_previous_session_result(monkeypatch):
     result, from_cache = app.load_with_fallback("trending", unavailable)
     assert result == ["cached later"]
     assert from_cache is True
+
+
+def test_import_watchlist_rejects_invalid_backup_entry(isolated_db):
+    with pytest.raises(ValueError, match="invalid score"):
+        app.import_watchlist('[{"anime_id": 7, "title": "Broken", "score": 101}]')
+
+
+def test_init_db_migrates_legacy_airing_columns(tmp_path, monkeypatch):
+    database = tmp_path / "legacy.db"
+    monkeypatch.setattr(app, "DB_PATH", database)
+    with sqlite3.connect(database) as connection:
+        connection.execute("""CREATE TABLE watchlist (
+            anime_id INTEGER PRIMARY KEY, title TEXT NOT NULL, image TEXT,
+            status TEXT NOT NULL, progress INTEGER NOT NULL, episodes INTEGER,
+            score INTEGER, genres TEXT, updated_at TEXT NOT NULL
+        )""")
+    app.init_db()
+    with sqlite3.connect(database) as connection:
+        columns = {row[1] for row in connection.execute("PRAGMA table_info(watchlist)")}
+    assert {"next_airing_at", "next_airing_episode"}.issubset(columns)

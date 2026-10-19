@@ -1,25 +1,48 @@
 from __future__ import annotations
 
-import sqlite3
 import json
+import logging
+import os
 import random
+import sqlite3
 import time
+from collections.abc import Callable
 from datetime import date, datetime
 from pathlib import Path
-from collections.abc import Callable
 from typing import Any
 
 import requests
 import streamlit as st
 
 
+def _env_int(name: str, default: int) -> int:
+    try:
+        return int(os.getenv(name, str(default)))
+    except ValueError:
+        return default
+
+
+def _env_float(name: str, default: float) -> float:
+    try:
+        return float(os.getenv(name, str(default)))
+    except ValueError:
+        return default
+
+
 APP_NAME = "Otaku Orbit"
-APP_VERSION = "1.1.1"
+APP_VERSION = "1.3.0"
 AUTHOR_CREDIT = "Made by Shashank — powered by Saiyan spirit"
-API_URL = "https://graphql.anilist.co"
-DB_PATH = Path(__file__).with_name("anime_companion.db")
-REQUEST_ATTEMPTS = 3
+API_URL = os.getenv("ANILIST_API_URL", "https://graphql.anilist.co")
+DB_PATH = Path(os.getenv("OTAKU_ORBIT_DB_PATH", Path(__file__).with_name("anime_companion.db")))
+REQUEST_ATTEMPTS = max(1, _env_int("OTAKU_ORBIT_REQUEST_ATTEMPTS", 3))
+REQUEST_TIMEOUT = max(1.0, _env_float("OTAKU_ORBIT_REQUEST_TIMEOUT", 15.0))
+API_CACHE_TTL = max(60, _env_int("OTAKU_ORBIT_CACHE_TTL", 900))
 WATCH_STATUSES = ["WATCHING", "PLANNING", "COMPLETED", "DROPPED"]
+logger = logging.getLogger("otaku_orbit")
+
+
+class AniListRateLimitError(requests.RequestException):
+    """Raised when AniList asks the app to slow down."""
 
 SEARCH_QUERY = """
 query ($search: String, $season: MediaSeason, $seasonYear: Int, $page: Int) {
@@ -116,6 +139,48 @@ def export_watchlist(rows: list[dict[str, Any]]) -> str:
     return json.dumps(rows, indent=2, ensure_ascii=False)
 
 
+def validate_backup_row(row: Any, index: int) -> dict[str, Any]:
+    if not isinstance(row, dict):
+        raise ValueError(f"Backup entry {index} must be an object.")
+    try:
+        anime_id = int(row["anime_id"])
+        title = str(row["title"]).strip()
+        progress = int(row.get("progress", 0))
+    except (KeyError, TypeError, ValueError) as error:
+        raise ValueError(f"Backup entry {index} has invalid id, title, or progress.") from error
+    if anime_id <= 0 or not title or progress < 0:
+        raise ValueError(f"Backup entry {index} has invalid id, title, or progress.")
+    episodes = row.get("episodes")
+    if episodes is not None:
+        try:
+            episodes = int(episodes)
+        except (TypeError, ValueError) as error:
+            raise ValueError(f"Backup entry {index} has an invalid episode count.") from error
+        if episodes < 0:
+            raise ValueError(f"Backup entry {index} has an invalid episode count.")
+    score = row.get("score")
+    if score is not None:
+        try:
+            score = int(score)
+        except (TypeError, ValueError) as error:
+            raise ValueError(f"Backup entry {index} has an invalid score.") from error
+        if not 0 <= score <= 100:
+            raise ValueError(f"Backup entry {index} has an invalid score.")
+    return {
+        "anime_id": anime_id,
+        "title": title,
+        "image": row.get("image"),
+        "status": row.get("status", "PLANNING") if row.get("status") in WATCH_STATUSES else "PLANNING",
+        "progress": progress,
+        "episodes": episodes,
+        "score": score,
+        "genres": str(row.get("genres", "")),
+        "next_airing_at": row.get("next_airing_at"),
+        "next_airing_episode": row.get("next_airing_episode"),
+        "updated_at": row.get("updated_at", datetime.now().isoformat(timespec="seconds")),
+    }
+
+
 def import_watchlist(payload: str) -> int:
     if len(payload.encode("utf-8")) > 2_000_000:
         raise ValueError("That backup is larger than the 2 MB safety limit.")
@@ -124,9 +189,8 @@ def import_watchlist(payload: str) -> int:
         raise ValueError("A watchlist backup must contain a list of titles.")
     restored = 0
     with sqlite3.connect(DB_PATH) as connection:
-        for row in imported:
-            if not isinstance(row, dict) or not row.get("anime_id") or not row.get("title"):
-                continue
+        for index, raw_row in enumerate(imported, start=1):
+            row = validate_backup_row(raw_row, index)
             connection.execute("""INSERT INTO watchlist
                 (anime_id, title, image, status, progress, episodes, score, genres,
                  next_airing_at, next_airing_episode, updated_at)
@@ -135,30 +199,35 @@ def import_watchlist(payload: str) -> int:
                 status=excluded.status, progress=excluded.progress, episodes=excluded.episodes,
                 score=excluded.score, genres=excluded.genres, next_airing_at=excluded.next_airing_at,
                 next_airing_episode=excluded.next_airing_episode, updated_at=excluded.updated_at""",
-                (int(row["anime_id"]), str(row["title"]), row.get("image"),
-                 row.get("status", "PLANNING") if row.get("status") in WATCH_STATUSES else "PLANNING",
-                 max(0, int(row.get("progress", 0))), row.get("episodes"), row.get("score"),
-                 row.get("genres", ""), row.get("next_airing_at"), row.get("next_airing_episode"),
-                 row.get("updated_at", datetime.now().isoformat(timespec="seconds"))))
+                (row["anime_id"], row["title"], row["image"], row["status"], row["progress"],
+                 row["episodes"], row["score"], row["genres"], row["next_airing_at"],
+                 row["next_airing_episode"], row["updated_at"]))
             restored += 1
     return restored
 
 
-@st.cache_data(ttl=900, show_spinner=False)
+@st.cache_data(ttl=API_CACHE_TTL, show_spinner=False)
 def anilist_response(query: str, variables: dict[str, Any] | None = None) -> dict[str, Any]:
     request_body = {"query": query, "variables": variables or {}}
     response: requests.Response | None = None
     for attempt in range(REQUEST_ATTEMPTS):
         try:
             response = requests.post(API_URL, json=request_body,
-                                     headers={"User-Agent": "OtakuOrbit/1.0"}, timeout=15)
+                                     headers={"User-Agent": f"OtakuOrbit/{APP_VERSION}"}, timeout=REQUEST_TIMEOUT)
             response.raise_for_status()
             break
-        except requests.RequestException:
+        except requests.RequestException as error:
             status_code = getattr(response, "status_code", None)
+            if status_code == 429:
+                logger.warning("AniList rate limit reached on attempt %s", attempt + 1)
+                raise AniListRateLimitError(
+                    "AniList is rate-limiting requests. Please wait a minute and try again."
+                ) from error
             retryable_status = status_code is None or status_code == 429 or status_code >= 500
             if attempt == REQUEST_ATTEMPTS - 1 or not retryable_status:
+                logger.error("AniList request failed after %s attempt(s): %s", attempt + 1, error)
                 raise
+            logger.info("Retrying AniList request after transient failure: attempt %s", attempt + 2)
             time.sleep(0.35 * (2 ** attempt))
     if response is None:
         raise requests.RequestException("AniList did not return a response")
@@ -205,6 +274,7 @@ def load_with_fallback(cache_key: str, loader: Callable[[], Any]) -> tuple[Any, 
     except (requests.RequestException, RuntimeError):
         if cache_key not in offline_cache:
             raise
+        logger.warning("Using cached result for %s after a remote request failed", cache_key)
         return offline_cache[cache_key], True
     offline_cache[cache_key] = result
     return result, False
@@ -452,6 +522,7 @@ def render_recommendations(rows: list[dict[str, Any]], saved_ids: set[int]) -> N
 
 
 def main() -> None:
+    logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
     st.set_page_config(page_title=APP_NAME, page_icon="O", layout="wide", initial_sidebar_state="expanded")
     init_db()
     st.markdown("""<style>
@@ -477,6 +548,11 @@ def main() -> None:
         st.session_state["daily_goal"] = st.number_input("Daily episode goal", min_value=1, max_value=20,
                                                            value=st.session_state.get("daily_goal", 3))
         st.session_state["compact_cards"] = st.toggle("Compact cards", value=st.session_state.get("compact_cards", False))
+        with st.expander("System status"):
+            st.caption(f"AniList endpoint: {API_URL}")
+            st.caption(f"Request cache: {API_CACHE_TTL} seconds")
+            st.caption(f"Local database: {DB_PATH.name}")
+            st.caption("Storage mode: local SQLite")
         st.caption("Data is stored locally on this device.")
     st.markdown(f'<div class="orbit-credit">{AUTHOR_CREDIT}</div>', unsafe_allow_html=True)
 
@@ -516,8 +592,8 @@ def main() -> None:
                     search_state["results"] = [*search_state["results"], *next_results]
                     search_state.update({"page": next_page, "has_next": has_next})
                     st.rerun()
-            except requests.RequestException:
-                st.error("AniList is unavailable and no cached results exist for this search.")
+            except requests.RequestException as error:
+                st.error(str(error))
                 results = []
             except RuntimeError as error:
                 st.error(str(error))
@@ -540,7 +616,6 @@ def main() -> None:
                 render_card(anime, saved_ids, "discover")
     else:
         now = date.today()
-        season_names = [("WINTER", "Winter"), ("SPRING", "Spring"), ("SUMMER", "Summer"), ("FALL", "Fall")]
         month = now.month
         season = "WINTER" if month in (12, 1, 2) else "SPRING" if month in (3, 4, 5) else "SUMMER" if month in (6, 7, 8) else "FALL"
         st.title(f"{season.title()} {now.year}")
