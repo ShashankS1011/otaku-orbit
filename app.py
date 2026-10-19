@@ -14,7 +14,7 @@ import streamlit as st
 
 
 APP_NAME = "Otaku Orbit"
-APP_VERSION = "1.1.0"
+APP_VERSION = "1.1.1"
 AUTHOR_CREDIT = "Made by Shashank — powered by Saiyan spirit"
 API_URL = "https://graphql.anilist.co"
 DB_PATH = Path(__file__).with_name("anime_companion.db")

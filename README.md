@@ -6,7 +6,7 @@
 
 **Made by Shashank — powered by Saiyan spirit**
 
-Current version: `1.1.0`
+Current version: `1.1.1`
 
 ## Deploy on Streamlit Community Cloud
 
@@ -67,6 +67,10 @@ Otaku Orbit follows semantic versioning in `MAJOR.MINOR.PATCH` form:
 - **Patch:** bug fixes and small maintenance updates
 
 The application version is defined in `app.py` and updated with each published push.
+
+## License
+
+Otaku Orbit is released under the [MIT License](./LICENSE).
 
 ## Technology
 
