@@ -1,0 +1,6 @@
+__pycache__/
+*.py[cod]
+.venv/
+anime_companion.db
+.streamlit/secrets.toml
+.vscode/
