@@ -10,7 +10,18 @@
 
 [The app currently runs locally with Streamlit](#run-locally)
 
-The previous Community Cloud link has been removed because it required a signed-in Streamlit deployment and did not point to a public app yet.
+## Deploy on Streamlit Community Cloud
+
+[Deploy Otaku Orbit on Streamlit Community Cloud](https://share.streamlit.io/)
+
+After signing in with GitHub, create a new app with these settings:
+
+- **Repository:** `ShashankS1011/otaku-orbit`
+- **Branch:** `main`
+- **Main file path:** `app.py`
+- **App URL:** choose `otaku-orbit` if it is available
+
+Streamlit will build the app from this repository and provide a public `streamlit.app` URL. Future pushes to `main` will automatically update the deployed app.
 
 ## What it does
 
