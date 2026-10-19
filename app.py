@@ -6,6 +6,7 @@ import random
 import time
 from datetime import date, datetime
 from pathlib import Path
+from collections.abc import Callable
 from typing import Any
 
 import requests
@@ -13,7 +14,8 @@ import streamlit as st
 
 
 APP_NAME = "Otaku Orbit"
-AUTHOR_CREDIT = "Made by Shashank — with the spirit of Plus Ultra ✦"
+APP_VERSION = "1.1.0"
+AUTHOR_CREDIT = "Made by Shashank — powered by Saiyan spirit"
 API_URL = "https://graphql.anilist.co"
 DB_PATH = Path(__file__).with_name("anime_companion.db")
 REQUEST_ATTEMPTS = 3
@@ -143,7 +145,7 @@ def import_watchlist(payload: str) -> int:
 
 
 @st.cache_data(ttl=900, show_spinner=False)
-def anilist_query(query: str, variables: dict[str, Any] | None = None) -> list[dict[str, Any]]:
+def anilist_response(query: str, variables: dict[str, Any] | None = None) -> dict[str, Any]:
     request_body = {"query": query, "variables": variables or {}}
     response: requests.Response | None = None
     for attempt in range(REQUEST_ATTEMPTS):
@@ -163,7 +165,11 @@ def anilist_query(query: str, variables: dict[str, Any] | None = None) -> list[d
     payload = response.json()
     if payload.get("errors"):
         raise RuntimeError(payload["errors"][0].get("message", "AniList returned an error"))
-    data = payload.get("data", {})
+    return payload.get("data", {})
+
+
+def anilist_query(query: str, variables: dict[str, Any] | None = None) -> list[dict[str, Any]]:
+    data = anilist_response(query, variables)
     if data.get("Media"):
         return [data["Media"]]
     return data.get("Page", {}).get("media", [])
@@ -177,10 +183,31 @@ def fetch_anime_detail(anime_id: int) -> dict[str, Any] | None:
 
 def fetch_anime(search: str = "", season: str | None = None, year: int | None = None,
                 page: int = 1) -> list[dict[str, Any]]:
+    results, _ = fetch_anime_page(search, season, year, page)
+    return results
+
+
+def fetch_anime_page(search: str = "", season: str | None = None, year: int | None = None,
+                     page: int = 1) -> tuple[list[dict[str, Any]], bool]:
     variables: dict[str, Any] = {"search": search or None, "page": page}
     if season:
         variables["season"], variables["seasonYear"] = season, year
-    return anilist_query(SEARCH_QUERY, variables)
+    data = anilist_response(SEARCH_QUERY, variables)
+    page_data = data.get("Page", {})
+    return page_data.get("media", []), bool(page_data.get("pageInfo", {}).get("hasNextPage"))
+
+
+def load_with_fallback(cache_key: str, loader: Callable[[], Any]) -> tuple[Any, bool]:
+    """Load remote data and fall back to this session's last successful result."""
+    offline_cache = st.session_state.setdefault("offline_cache", {})
+    try:
+        result = loader()
+    except (requests.RequestException, RuntimeError):
+        if cache_key not in offline_cache:
+            raise
+        return offline_cache[cache_key], True
+    offline_cache[cache_key] = result
+    return result, False
 
 
 def filter_anime(results: list[dict[str, Any]], genre: str = "All genres",
@@ -285,12 +312,14 @@ def render_card(anime: dict[str, Any], saved_ids: set[int], key_prefix: str) -> 
             st.caption(" · ".join(genres))
         if anime.get("nextAiringEpisode"):
             st.info(format_airing(anime))
-        if st.button("Details", key=f"details-{key_prefix}-{anime['id']}", use_container_width=True):
+        if st.button(f"Details: {title}", key=f"details-{key_prefix}-{anime['id']}",
+                     help=f"Open full details for {title}", use_container_width=True):
             show_anime_details(anime["id"])
         if anime["id"] in saved_ids:
             st.success("In your watchlist")
         else:
-            if st.button("＋ Add to watchlist", key=f"add-{key_prefix}-{anime['id']}", use_container_width=True):
+            if st.button(f"Add {title} to watchlist", key=f"add-{key_prefix}-{anime['id']}",
+                         help=f"Save {title} to your watchlist", use_container_width=True):
                 save_anime(anime)
                 st.rerun()
 
@@ -308,7 +337,9 @@ def render_watchlist() -> None:
     st.divider()
     sort_order = st.selectbox("Sort saved titles", ["Recently updated", "Title", "Score", "Progress"],
                               key="watchlist-sort")
-    if sort_order == "Title":
+    if sort_order == "Recently updated":
+        rows.sort(key=lambda row: row.get("updated_at") or "", reverse=True)
+    elif sort_order == "Title":
         rows.sort(key=lambda row: row["title"].lower())
     elif sort_order == "Score":
         rows.sort(key=lambda row: row["score"] or 0, reverse=True)
@@ -421,7 +452,7 @@ def render_recommendations(rows: list[dict[str, Any]], saved_ids: set[int]) -> N
 
 
 def main() -> None:
-    st.set_page_config(page_title=APP_NAME, page_icon="✦", layout="wide", initial_sidebar_state="expanded")
+    st.set_page_config(page_title=APP_NAME, page_icon="O", layout="wide", initial_sidebar_state="expanded")
     init_db()
     st.markdown("""<style>
     .block-container {max-width: 1320px; padding-top: 2rem; padding-bottom: 5rem;}
@@ -438,23 +469,16 @@ def main() -> None:
     rows = db_rows()
     saved_ids = {row["anime_id"] for row in rows}
     with st.sidebar:
-        st.markdown("# ✦ Otaku Orbit")
-        st.caption("Your personal anime command centre")
+        st.markdown("# Otaku Orbit")
+        st.caption(f"Your personal anime command centre | v{APP_VERSION}")
         page = st.radio("Navigate", ["Discover", "For you", "Seasonal", "Watchlist", "Statistics"], label_visibility="collapsed")
         st.divider()
         st.metric("Saved titles", len(rows))
         st.session_state["daily_goal"] = st.number_input("Daily episode goal", min_value=1, max_value=20,
                                                            value=st.session_state.get("daily_goal", 3))
         st.session_state["compact_cards"] = st.toggle("Compact cards", value=st.session_state.get("compact_cards", False))
-        light_mode = st.toggle("Light mode", value=False)
         st.caption("Data is stored locally on this device.")
     st.markdown(f'<div class="orbit-credit">{AUTHOR_CREDIT}</div>', unsafe_allow_html=True)
-    if light_mode:
-        st.markdown("""<style>
-        [data-testid="stAppViewContainer"] {background: #f7f5fb; color: #201c2c;}
-        [data-testid="stSidebar"] {background: #eeeafa;}
-        .orbit-muted {color: #5d5870;}
-        </style>""", unsafe_allow_html=True)
 
     if page == "Watchlist":
         render_watchlist()
@@ -467,13 +491,33 @@ def main() -> None:
         return
     if page == "Discover":
         st.markdown('<div class="orbit-hero"><div class="orbit-kicker">Anime discovery, upgraded</div><h1>Find your next obsession</h1><div class="orbit-muted">Search AniList, save what catches your eye, and let your watchlist become your personal anime map.</div></div>', unsafe_allow_html=True)
-        query = st.text_input("Search anime", placeholder="Try Frieren, One Piece, Cowboy Bebop…")
-        page_number = st.number_input("Search page", min_value=1, max_value=20, value=1, step=1) if query else 1
+        query = st.text_input("Search anime", placeholder="Try Frieren, One Piece, or Cowboy Bebop")
         if query:
+            search_state = st.session_state.setdefault("discover_search", {
+                "query": "", "results": [], "page": 0, "has_next": True,
+            })
+            if search_state["query"] != query:
+                search_state.update({"query": query, "results": [], "page": 0, "has_next": True})
             try:
-                results = fetch_anime(query, page=int(page_number))
+                if not search_state["results"]:
+                    (first_page, has_next), from_cache = load_with_fallback(
+                        f"search:{query}:1", lambda: fetch_anime_page(query, page=1)
+                    )
+                    search_state.update({"results": first_page, "page": 1, "has_next": has_next})
+                    if from_cache:
+                        st.info("Showing cached results because AniList is currently unavailable.")
+                results = search_state["results"]
+                if search_state["has_next"] and st.button("Load more results",
+                                                           help="Fetch the next page of search results"):
+                    next_page = search_state["page"] + 1
+                    (next_results, has_next), _ = load_with_fallback(
+                        f"search:{query}:{next_page}", lambda: fetch_anime_page(query, page=next_page)
+                    )
+                    search_state["results"] = [*search_state["results"], *next_results]
+                    search_state.update({"page": next_page, "has_next": has_next})
+                    st.rerun()
             except requests.RequestException:
-                st.error("AniList is unavailable right now. Check your connection and try again.")
+                st.error("AniList is unavailable and no cached results exist for this search.")
                 results = []
             except RuntimeError as error:
                 st.error(str(error))
@@ -481,13 +525,15 @@ def main() -> None:
         else:
             st.subheader("Trending now")
             try:
-                results = anilist_query(TRENDING_QUERY)
-            except requests.RequestException:
-                st.warning("AniList is unavailable. Search again when you are back online.")
+                results, from_cache = load_with_fallback("trending", lambda: anilist_query(TRENDING_QUERY))
+                if from_cache:
+                    st.info("AniList is unavailable, so these are your cached trending results.")
+            except (requests.RequestException, RuntimeError) as error:
+                st.warning(f"AniList is unavailable and no cached trending results exist yet: {error}")
                 results = []
         if st.button("Surprise me", help="Show one random title from the current results") and results:
             results = [random.choice(results)]
-            st.info("A little nudge from the anime universe ✦")
+            st.info("A random pick from the anime universe.")
         results = render_filters(results, "discover")
         for anime in results:
             with st.container(border=True):

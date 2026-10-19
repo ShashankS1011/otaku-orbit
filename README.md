@@ -1,14 +1,12 @@
-# ✦ Otaku Orbit
+# Otaku Orbit
 
 > Your personal anime command centre — discover, track, and plan your next obsession.
 
 **Otaku Orbit** is a fast, polished anime companion built with Python and Streamlit. It brings AniList discovery, seasonal browsing, personalized recommendations, watchlist progress, and useful viewing statistics into one calm, focused dashboard.
 
-**Made by Shashank — with the spirit of Plus Ultra ✦**
+**Made by Shashank — powered by Saiyan spirit**
 
-## Use the app
-
-[The app currently runs locally with Streamlit](#run-locally)
+Current version: `1.1.0`
 
 ## Deploy on Streamlit Community Cloud
 
@@ -26,7 +24,7 @@ Streamlit will build the app from this repository and provide a public `streamli
 ## What it does
 
 - Search AniList's anime catalogue with fast cached GraphQL requests
-- Browse search pages, open full anime details, and use a random discovery prompt
+- Browse paginated search results, open full anime details, and use random discovery
 - Browse trending titles and the current seasonal lineup
 - Filter results by genre, format, score, and mature-content preference
 - Get recommendations based on the genres in your watchlist
@@ -36,7 +34,7 @@ Streamlit will build the app from this repository and provide a public `streamli
 - Continue watching view plus search and status filters for your library
 - Export and restore your watchlist as a portable JSON backup
 - Set a daily episode goal and see upcoming airing reminders
-- Choose compact cards or light mode for a more comfortable layout
+- Choose compact cards for a more focused layout
 - Explore a personal genre profile with lightweight charts
 - Stay resilient with cached requests, retries, and clear API error states
 
@@ -60,10 +58,16 @@ python -m py_compile app.py
 
 GitHub Actions runs both checks for every push and pull request. The workflow is in [`.github/workflows/ci.yml`](.github/workflows/ci.yml).
 
+## Versioning
+
+Otaku Orbit follows semantic versioning in `MAJOR.MINOR.PATCH` form:
+
+- **Major:** breaking changes
+- **Minor:** new backward-compatible features
+- **Patch:** bug fixes and small maintenance updates
+
+The application version is defined in `app.py` and updated with each published push.
+
 ## Technology
 
 Python · Streamlit · AniList GraphQL · SQLite · pytest · GitHub Actions
-
-## Roadmap
-
-AniList OAuth synchronization, episode notifications, Discord commands, and optional cloud persistence are natural next steps. The core data functions are kept small and reusable so those features can be added without rewriting the interface.
