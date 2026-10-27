@@ -1,10 +1,12 @@
 # Otaku Orbit
 
-> Your personal anime command centre — discover, track, and plan your next obsession.
+> Your personal anime command centre ? discover, track, and plan your next obsession.
 
 **Otaku Orbit** is a fast, polished anime companion built with Python and Streamlit. It brings AniList discovery, seasonal browsing, personalized recommendations, watchlist progress, and useful viewing statistics into one calm, focused dashboard.
 
-**Made by Shashank — powered by Saiyan spirit**
+**Made by Shashank ? powered by Saiyan spirit**
+
+[Open the live Streamlit app](https://otaku-orbit.streamlit.app/)
 
 Current version: `1.3.0`
 
@@ -17,7 +19,7 @@ After signing in with GitHub, create a new app with these settings:
 - **Repository:** `ShashankS1011/otaku-orbit`
 - **Branch:** `main`
 - **Main file path:** `app.py`
-- **App URL:** choose `otaku-orbit` if it is available
+- **App URL:** https://otaku-orbit.streamlit.app/
 
 Streamlit will build the app from this repository and provide a public `streamlit.app` URL. Future pushes to `main` will automatically update the deployed app.
 
@@ -68,6 +70,14 @@ GitHub Actions runs tests, syntax checks, and Ruff for every push and pull reque
 3. Update the current version in this README.
 4. Push a release branch and merge it through a passing pull request.
 
+## Contributors
+
+- [butteryjam](https://github.com/butteryjam) ? reported the mobile browser compatibility issue.
+
+## Community support
+
+[Open the Otaku Orbit support thread on Discord](https://discord.com/channels/@me/1252520070043668561/1562171196617785464)
+
 ## Versioning
 
 Otaku Orbit follows semantic versioning in `MAJOR.MINOR.PATCH` form:
@@ -84,4 +94,4 @@ Otaku Orbit is released under the [MIT License](./LICENSE).
 
 ## Technology
 
-Python · Streamlit · AniList GraphQL · SQLite · pytest · GitHub Actions
+Python ? Streamlit ? AniList GraphQL ? SQLite ? pytest ? GitHub Actions
