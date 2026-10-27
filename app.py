@@ -94,7 +94,7 @@ def init_db() -> None:
         connection.execute("""CREATE TABLE IF NOT EXISTS watchlist (
             anime_id INTEGER PRIMARY KEY, title TEXT NOT NULL, image TEXT,
             status TEXT NOT NULL DEFAULT 'PLANNING', progress INTEGER NOT NULL DEFAULT 0,
-            episodes INTEGER, score INTEGER, genres TEXT, next_airing_at INTEGER,
+            episodes INTEGER, duration INTEGER, score INTEGER, genres TEXT, next_airing_at INTEGER,
             next_airing_episode INTEGER, user_score INTEGER, notes TEXT, updated_at TEXT NOT NULL
         )""")
         columns = {row[1] for row in connection.execute("PRAGMA table_info(watchlist)")}
@@ -106,6 +106,8 @@ def init_db() -> None:
             connection.execute("ALTER TABLE watchlist ADD COLUMN user_score INTEGER")
         if "notes" not in columns:
             connection.execute("ALTER TABLE watchlist ADD COLUMN notes TEXT")
+        if "duration" not in columns:
+            connection.execute("ALTER TABLE watchlist ADD COLUMN duration INTEGER")
 
 
 def db_rows() -> list[dict[str, Any]]:
@@ -118,15 +120,15 @@ def save_anime(anime: dict[str, Any], status: str = "PLANNING", progress: int = 
     title = display_title(anime)
     with sqlite3.connect(DB_PATH) as connection:
         connection.execute("""INSERT INTO watchlist
-            (anime_id, title, image, status, progress, episodes, score, genres,
+            (anime_id, title, image, status, progress, episodes, duration, score, genres,
              next_airing_at, next_airing_episode, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(anime_id) DO UPDATE SET title=excluded.title, image=excluded.image,
-            status=excluded.status, progress=excluded.progress, episodes=excluded.episodes,
+            status=excluded.status, progress=excluded.progress, episodes=excluded.episodes, duration=excluded.duration,
             score=excluded.score, genres=excluded.genres, next_airing_at=excluded.next_airing_at,
             next_airing_episode=excluded.next_airing_episode, updated_at=excluded.updated_at""",
             (anime["id"], title, anime.get("coverImage", {}).get("large"), status, progress,
-             anime.get("episodes"), anime.get("averageScore"), ", ".join(anime.get("genres", [])),
+             anime.get("episodes"), anime.get("duration"), anime.get("averageScore"), ", ".join(anime.get("genres", [])),
              (anime.get("nextAiringEpisode") or {}).get("airingAt"),
              (anime.get("nextAiringEpisode") or {}).get("episode"),
              datetime.now().isoformat(timespec="seconds")))
@@ -177,7 +179,7 @@ def export_watchlist(rows: list[dict[str, Any]]) -> str:
 def export_watchlist_csv(rows: list[dict[str, Any]]) -> str:
     output = io.StringIO()
     writer = csv.writer(output)
-    writer.writerow(["Anime ID", "Title", "Status", "Progress", "Episodes", "AniList Score", "User Score", "Genres", "Notes", "Updated At"])
+    writer.writerow(["Anime ID", "Title", "Status", "Progress", "Episodes", "Duration (min)", "AniList Score", "User Score", "Genres", "Notes", "Updated At"])
     for row in rows:
         writer.writerow([
             row.get("anime_id"),
@@ -185,6 +187,7 @@ def export_watchlist_csv(rows: list[dict[str, Any]]) -> str:
             row.get("status"),
             row.get("progress"),
             row.get("episodes") or "",
+            row.get("duration") or "",
             row.get("score") or "",
             row.get("user_score") or "",
             row.get("genres") or "",
@@ -213,6 +216,14 @@ def validate_backup_row(row: Any, index: int) -> dict[str, Any]:
             raise ValueError(f"Backup entry {index} has an invalid episode count.") from error
         if episodes < 0:
             raise ValueError(f"Backup entry {index} has an invalid episode count.")
+    duration = row.get("duration")
+    if duration is not None:
+        try:
+            duration = int(duration)
+        except (TypeError, ValueError) as error:
+            raise ValueError(f"Backup entry {index} has an invalid episode duration.") from error
+        if duration <= 0:
+            raise ValueError(f"Backup entry {index} has an invalid episode duration.")
     score = row.get("score")
     if score is not None:
         try:
@@ -252,6 +263,7 @@ def validate_backup_row(row: Any, index: int) -> dict[str, Any]:
         "status": row.get("status", "PLANNING") if row.get("status") in WATCH_STATUSES else "PLANNING",
         "progress": progress,
         "episodes": episodes,
+        "duration": duration,
         "score": score,
         "genres": str(row.get("genres", "")),
         "next_airing_at": next_airing_at,
@@ -273,15 +285,15 @@ def import_watchlist(payload: str) -> int:
         for index, raw_row in enumerate(imported, start=1):
             row = validate_backup_row(raw_row, index)
             connection.execute("""INSERT INTO watchlist
-                (anime_id, title, image, status, progress, episodes, score, genres,
+                (anime_id, title, image, status, progress, episodes, duration, score, genres,
                  next_airing_at, next_airing_episode, user_score, notes, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(anime_id) DO UPDATE SET title=excluded.title, image=excluded.image,
-                status=excluded.status, progress=excluded.progress, episodes=excluded.episodes,
+                status=excluded.status, progress=excluded.progress, episodes=excluded.episodes, duration=excluded.duration,
                 score=excluded.score, genres=excluded.genres, next_airing_at=excluded.next_airing_at,
                 next_airing_episode=excluded.next_airing_episode, user_score=coalesce(excluded.user_score, watchlist.user_score), notes=coalesce(excluded.notes, watchlist.notes), updated_at=excluded.updated_at""",
                 (row["anime_id"], row["title"], row["image"], row["status"], row["progress"],
-                 row["episodes"], row["score"], row["genres"], row["next_airing_at"],
+                 row["episodes"], row["duration"], row["score"], row["genres"], row["next_airing_at"],
                  row["next_airing_episode"], row["user_score"], row.get("notes", ""), row["updated_at"]))
             restored += 1
     return restored
@@ -410,6 +422,22 @@ def clean_description(text: str | None) -> str:
     return " ".join(text.replace("<br>", " ").split())
 
 
+def calculate_runtime_display(episodes: int | None, duration: int | None, progress: int = 0) -> str:
+    """Format an anime's total or remaining runtime, defaulting to 24 minutes per episode."""
+    if episodes is None or episodes <= 0:
+        return "Estimated watch time unavailable"
+    episode_minutes = duration if duration is not None and duration > 0 else 24
+    remaining_episodes = max(episodes - max(progress, 0), 0)
+    minutes = episodes * episode_minutes if progress <= 0 else remaining_episodes * episode_minutes
+    hours, leftover_minutes = divmod(minutes, 60)
+    formatted = f"{hours}h {leftover_minutes}m" if hours and leftover_minutes else (
+        f"{hours}h" if hours else f"{leftover_minutes}m"
+    )
+    if progress > 0:
+        return f"{formatted} remaining"
+    return f"{episodes} eps · {formatted} total"
+
+
 def format_airing(anime: dict[str, Any]) -> str:
     airing = anime.get("nextAiringEpisode")
     if not airing:
@@ -471,6 +499,7 @@ def show_anime_details(anime_id: int) -> None:
     st.caption(f"{anime.get('format', 'ANIME')} · {anime.get('status', 'UNKNOWN')} · {anime.get('averageScore') or '—'}/100")
     st.write(clean_description(anime.get("description")))
     st.write(f"**Episodes:** {anime.get('episodes') or 'Unknown'} · **Duration:** {anime.get('duration') or 'Unknown'} min")
+    st.caption(f"Estimated watch time: {calculate_runtime_display(anime.get('episodes'), anime.get('duration'))}")
     studios = [studio["name"] for studio in anime.get("studios", {}).get("nodes", [])]
     if studios:
         st.write("**Studio:** " + ", ".join(studios))
@@ -549,6 +578,8 @@ def render_watchlist() -> None:
             progress = row["progress"]
             remaining = max(total - progress, 0) if total else "?"
             st.write(f"**{row['title']}** · episode {progress + 1} next · {remaining} remaining")
+            if total:
+                st.caption(f"Remaining watch time: {calculate_runtime_display(total, row.get('duration'), progress)}")
         st.divider()
     reminders = [(row["title"], format_row_airing(row)) for row in rows if format_row_airing(row)]
     if reminders:
