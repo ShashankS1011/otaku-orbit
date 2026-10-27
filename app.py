@@ -47,10 +47,10 @@ class AniListRateLimitError(requests.RequestException):
     """Raised when AniList asks the app to slow down."""
 
 SEARCH_QUERY = """
-query ($search: String, $season: MediaSeason, $seasonYear: Int, $page: Int) {
+query ($search: String, $season: MediaSeason, $seasonYear: Int, $page: Int, $isAdult: Boolean) {
   Page(page: $page, perPage: 24) {
     pageInfo { hasNextPage }
-    media(search: $search, season: $season, seasonYear: $seasonYear,
+    media(search: $search, season: $season, seasonYear: $seasonYear, isAdult: $isAdult,
           type: ANIME, sort: POPULARITY_DESC) {
       id title { romaji english native } coverImage { large }
       description(asHtml: false) episodes duration status
@@ -269,14 +269,14 @@ def fetch_anime_detail(anime_id: int) -> dict[str, Any] | None:
 
 
 def fetch_anime(search: str = "", season: str | None = None, year: int | None = None,
-                page: int = 1) -> list[dict[str, Any]]:
-    results, _ = fetch_anime_page(search, season, year, page)
+                page: int = 1, is_adult: bool | None = False) -> list[dict[str, Any]]:
+    results, _ = fetch_anime_page(search, season, year, page, is_adult=is_adult)
     return results
 
 
 def fetch_anime_page(search: str = "", season: str | None = None, year: int | None = None,
-                     page: int = 1) -> tuple[list[dict[str, Any]], bool]:
-    variables: dict[str, Any] = {"search": search or None, "page": page}
+                     page: int = 1, is_adult: bool | None = False) -> tuple[list[dict[str, Any]], bool]:
+    variables: dict[str, Any] = {"search": search or None, "page": page, "isAdult": is_adult if is_adult is not None else False}
     if season:
         variables["season"], variables["seasonYear"] = season, year
     data = anilist_response(SEARCH_QUERY, variables)

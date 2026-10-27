@@ -238,3 +238,18 @@ def test_init_db_migrates_legacy_airing_columns(tmp_path, monkeypatch):
     with sqlite3.connect(database) as connection:
         columns = {row[1] for row in connection.execute("PRAGMA table_info(watchlist)")}
     assert {"next_airing_at", "next_airing_episode"}.issubset(columns)
+
+
+def test_fetch_anime_page_passes_is_adult_variable(monkeypatch):
+    recorded = {}
+
+    def fake_response(query, variables):
+        recorded.update(variables)
+        return {"Page": {"media": [], "pageInfo": {"hasNextPage": False}}}
+
+    monkeypatch.setattr(app, "anilist_response", fake_response)
+    app.fetch_anime_page("hero", is_adult=True)
+    assert recorded.get("isAdult") is True
+
+    app.fetch_anime_page("hero", is_adult=False)
+    assert recorded.get("isAdult") is False
