@@ -93,13 +93,15 @@ def init_db() -> None:
             anime_id INTEGER PRIMARY KEY, title TEXT NOT NULL, image TEXT,
             status TEXT NOT NULL DEFAULT 'PLANNING', progress INTEGER NOT NULL DEFAULT 0,
             episodes INTEGER, score INTEGER, genres TEXT, next_airing_at INTEGER,
-            next_airing_episode INTEGER, updated_at TEXT NOT NULL
+            next_airing_episode INTEGER, user_score INTEGER, updated_at TEXT NOT NULL
         )""")
         columns = {row[1] for row in connection.execute("PRAGMA table_info(watchlist)")}
         if "next_airing_at" not in columns:
             connection.execute("ALTER TABLE watchlist ADD COLUMN next_airing_at INTEGER")
         if "next_airing_episode" not in columns:
             connection.execute("ALTER TABLE watchlist ADD COLUMN next_airing_episode INTEGER")
+        if "user_score" not in columns:
+            connection.execute("ALTER TABLE watchlist ADD COLUMN user_score INTEGER")
 
 
 def db_rows() -> list[dict[str, Any]]:
@@ -126,9 +128,15 @@ def save_anime(anime: dict[str, Any], status: str = "PLANNING", progress: int = 
              datetime.now().isoformat(timespec="seconds")))
 
 
-def update_progress(anime_id: int, progress: int, status: str) -> None:
+def update_progress(anime_id: int, progress: int, status: str, user_score: int | None = None) -> None:
     with sqlite3.connect(DB_PATH) as connection:
-        connection.execute("UPDATE watchlist SET progress=?, status=?, updated_at=? WHERE anime_id=?",
+        if user_score is not None:
+            connection.execute(
+                "UPDATE watchlist SET progress=?, status=?, user_score=?, updated_at=? WHERE anime_id=?",
+                (progress, status, user_score, datetime.now().isoformat(timespec="seconds"), anime_id),
+            )
+        else:
+            connection.execute("UPDATE watchlist SET progress=?, status=?, updated_at=? WHERE anime_id=?",
                            (progress, status, datetime.now().isoformat(timespec="seconds"), anime_id))
 
 
@@ -184,6 +192,14 @@ def validate_backup_row(row: Any, index: int) -> dict[str, Any]:
             raise ValueError(f"Backup entry {index} has an invalid airing episode.") from error
         if next_airing_episode <= 0:
             raise ValueError(f"Backup entry {index} has an invalid airing episode.")
+    user_score = row.get("user_score")
+    if user_score is not None:
+        try:
+            user_score = int(user_score)
+        except (TypeError, ValueError) as error:
+            raise ValueError(f"Backup entry {index} has an invalid personal user score.") from error
+        if not 0 <= user_score <= 100:
+            raise ValueError(f"Backup entry {index} has an invalid personal user score.")
     return {
         "anime_id": anime_id,
         "title": title,
@@ -195,6 +211,7 @@ def validate_backup_row(row: Any, index: int) -> dict[str, Any]:
         "genres": str(row.get("genres", "")),
         "next_airing_at": next_airing_at,
         "next_airing_episode": next_airing_episode,
+        "user_score": user_score,
         "updated_at": row.get("updated_at", datetime.now().isoformat(timespec="seconds")),
     }
 
@@ -211,15 +228,15 @@ def import_watchlist(payload: str) -> int:
             row = validate_backup_row(raw_row, index)
             connection.execute("""INSERT INTO watchlist
                 (anime_id, title, image, status, progress, episodes, score, genres,
-                 next_airing_at, next_airing_episode, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 next_airing_at, next_airing_episode, user_score, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(anime_id) DO UPDATE SET title=excluded.title, image=excluded.image,
                 status=excluded.status, progress=excluded.progress, episodes=excluded.episodes,
                 score=excluded.score, genres=excluded.genres, next_airing_at=excluded.next_airing_at,
-                next_airing_episode=excluded.next_airing_episode, updated_at=excluded.updated_at""",
+                next_airing_episode=excluded.next_airing_episode, user_score=coalesce(excluded.user_score, watchlist.user_score), updated_at=excluded.updated_at""",
                 (row["anime_id"], row["title"], row["image"], row["status"], row["progress"],
                  row["episodes"], row["score"], row["genres"], row["next_airing_at"],
-                 row["next_airing_episode"], row["updated_at"]))
+                 row["next_airing_episode"], row["user_score"], row["updated_at"]))
             restored += 1
     return restored
 
@@ -506,16 +523,19 @@ def render_watchlist() -> None:
             total = row["episodes"] or 0
             progress = row["progress"]
             st.progress(min(progress / total, 1.0) if total else 0.0, text=f"Episode {progress}/{total or '?'}")
-            st.caption(f"Score: {row['score'] or '—'}  ·  {row['genres'] or 'Genre unknown'}")
+            user_score_display = f"{row['user_score']}/100" if row.get("user_score") else "Not rated"
+            st.caption(f"AniList: {row['score'] or '—'}  ·  My score: {user_score_display}  ·  {row['genres'] or 'Genre unknown'}")
         with right:
             status = st.selectbox("Status", WATCH_STATUSES,
                                   index=WATCH_STATUSES.index(row["status"]),
                                   key=f"status-{row['anime_id']}")
             new_progress = st.number_input("Episodes watched", min_value=0, max_value=row["episodes"] or 9999,
                                            value=row["progress"], key=f"progress-{row['anime_id']}")
+            my_score = st.number_input("My rating (0-100)", min_value=0, max_value=100,
+                                       value=int(row.get("user_score") or 0), key=f"userscore-{row['anime_id']}")
             a, b = st.columns(2)
             if a.button("Save", key=f"save-{row['anime_id']}", use_container_width=True):
-                update_progress(row["anime_id"], int(new_progress), status)
+                update_progress(row["anime_id"], int(new_progress), status, user_score=int(my_score) if my_score > 0 else None)
                 st.rerun()
             if b.button("Remove", key=f"remove-{row['anime_id']}", use_container_width=True):
                 remove_anime(row["anime_id"])
