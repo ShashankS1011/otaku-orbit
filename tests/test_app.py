@@ -59,6 +59,22 @@ def test_clean_description_normalizes_markup_and_whitespace():
     assert app.clean_description(None) == "No synopsis available."
 
 
+@pytest.mark.parametrize(
+    ("episodes", "duration", "progress", "expected"),
+    [
+        (12, 24, 0, "12 eps · 4h 48m total"),
+        (12, 24, 6, "2h 24m remaining"),
+        (2, 30, 1, "30m remaining"),
+        (2, None, 0, "2 eps · 48m total"),
+        (2, 0, 0, "2 eps · 48m total"),
+        (2, 30, 4, "0m remaining"),
+        (None, 24, 0, "Estimated watch time unavailable"),
+    ],
+)
+def test_calculate_runtime_display(episodes, duration, progress, expected):
+    assert app.calculate_runtime_display(episodes, duration, progress) == expected
+
+
 def test_display_title_handles_missing_title_object():
     assert app.display_title({}) == "Untitled"
 
@@ -80,6 +96,7 @@ def test_watchlist_round_trip(isolated_db):
         "title": {"english": "Test Anime"},
         "coverImage": {"large": "https://example.com/cover.jpg"},
         "episodes": 12,
+        "duration": 24,
         "averageScore": 88,
         "genres": ["Action", "Drama"],
     }
@@ -87,6 +104,7 @@ def test_watchlist_round_trip(isolated_db):
     rows = app.db_rows()
     assert rows[0]["title"] == "Test Anime"
     assert rows[0]["episodes"] == 12
+    assert rows[0]["duration"] == 24
     assert rows[0]["genres"] == "Action, Drama"
     app.update_progress(123, 3, "WATCHING")
     assert app.db_rows()[0]["progress"] == 3
@@ -120,11 +138,12 @@ def test_filter_anime_respects_genre_score_and_adult_flag():
 
 def test_watchlist_backup_can_be_restored(isolated_db):
     original = [{"anime_id": 7, "title": "Backup Anime", "status": "WATCHING", "progress": 4,
-                 "episodes": 12, "genres": "Action", "updated_at": "2026-01-01T00:00:00"}]
+                 "episodes": 12, "duration": 24, "genres": "Action", "updated_at": "2026-01-01T00:00:00"}]
     restored = app.import_watchlist(app.export_watchlist(original))
     assert restored == 1
     assert app.db_rows()[0]["title"] == "Backup Anime"
     assert app.db_rows()[0]["progress"] == 4
+    assert app.db_rows()[0]["duration"] == 24
 
 
 def test_anilist_query_retries_transient_request_error(monkeypatch):
@@ -237,7 +256,7 @@ def test_init_db_migrates_legacy_airing_columns(tmp_path, monkeypatch):
     app.init_db()
     with sqlite3.connect(database) as connection:
         columns = {row[1] for row in connection.execute("PRAGMA table_info(watchlist)")}
-    assert {"next_airing_at", "next_airing_episode", "user_score", "notes"}.issubset(columns)
+    assert {"next_airing_at", "next_airing_episode", "user_score", "notes", "duration"}.issubset(columns)
 
 
 def test_fetch_anime_page_passes_is_adult_variable(monkeypatch):
@@ -304,6 +323,7 @@ def test_export_watchlist_csv():
         "status": "COMPLETED",
         "progress": 24,
         "episodes": 24,
+        "duration": 24,
         "score": 91,
         "user_score": 99,
         "genres": "Sci-Fi, Thriller",
@@ -312,5 +332,5 @@ def test_export_watchlist_csv():
     }]
     csv_text = app.export_watchlist_csv(rows)
     assert "Anime ID,Title,Status" in csv_text
-    assert "101,Steins;Gate,COMPLETED" in csv_text
+    assert "101,Steins;Gate,COMPLETED,24,24,24,91,99" in csv_text
     assert "El Psy Kongroo" in csv_text
