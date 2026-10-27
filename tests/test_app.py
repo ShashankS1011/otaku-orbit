@@ -237,7 +237,7 @@ def test_init_db_migrates_legacy_airing_columns(tmp_path, monkeypatch):
     app.init_db()
     with sqlite3.connect(database) as connection:
         columns = {row[1] for row in connection.execute("PRAGMA table_info(watchlist)")}
-    assert {"next_airing_at", "next_airing_episode", "user_score"}.issubset(columns)
+    assert {"next_airing_at", "next_airing_episode", "user_score", "notes"}.issubset(columns)
 
 
 def test_fetch_anime_page_passes_is_adult_variable(monkeypatch):
@@ -277,3 +277,10 @@ def test_update_progress_sets_user_score(isolated_db):
     row = app.db_rows()[0]
     assert row["progress"] == 5
     assert row["user_score"] == 85
+
+
+def test_update_progress_sets_notes(isolated_db):
+    app.save_anime({"id": 888, "title": {"english": "Notes Test"}, "episodes": 24})
+    app.update_progress(888, 10, "WATCHING", notes="Masterpiece so far")
+    row = app.db_rows()[0]
+    assert row["notes"] == "Masterpiece so far"
