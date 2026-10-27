@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import csv
+import io
 import json
 import logging
 import os
@@ -170,6 +172,26 @@ def remove_anime(anime_id: int) -> None:
 
 def export_watchlist(rows: list[dict[str, Any]]) -> str:
     return json.dumps(rows, indent=2, ensure_ascii=False)
+
+
+def export_watchlist_csv(rows: list[dict[str, Any]]) -> str:
+    output = io.StringIO()
+    writer = csv.writer(output)
+    writer.writerow(["Anime ID", "Title", "Status", "Progress", "Episodes", "AniList Score", "User Score", "Genres", "Notes", "Updated At"])
+    for row in rows:
+        writer.writerow([
+            row.get("anime_id"),
+            row.get("title"),
+            row.get("status"),
+            row.get("progress"),
+            row.get("episodes") or "",
+            row.get("score") or "",
+            row.get("user_score") or "",
+            row.get("genres") or "",
+            row.get("notes") or "",
+            row.get("updated_at") or "",
+        ])
+    return output.getvalue()
 
 
 def validate_backup_row(row: Any, index: int) -> dict[str, Any]:
@@ -574,9 +596,12 @@ def render_watchlist() -> None:
     if not visible_rows:
         st.info("No saved titles match those filters.")
     with st.expander("Backup your watchlist"):
-        st.caption("Export a portable JSON backup or restore one on another device.")
-        st.download_button("Download backup", export_watchlist(rows), "otaku-orbit-watchlist.json",
-                           "application/json", use_container_width=True)
+        st.caption("Export a portable backup or restore one on another device.")
+        d_col1, d_col2 = st.columns(2)
+        d_col1.download_button("Download JSON", export_watchlist(rows), "otaku-orbit-watchlist.json", "application/json", use_container_width=True)
+        d_col2.download_button("Download CSV", export_watchlist_csv(rows), "otaku-orbit-watchlist.csv", "text/csv", use_container_width=True)
+
+
         uploaded = st.file_uploader("Restore JSON backup", type="json")
         if uploaded is not None and st.button("Restore backup", use_container_width=True):
             try:

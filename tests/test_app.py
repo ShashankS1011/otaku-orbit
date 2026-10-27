@@ -295,3 +295,22 @@ def test_increment_watchlist_progress_and_auto_completion(isolated_db):
     prog2, status2 = app.increment_watchlist_progress(777)
     assert prog2 == 2
     assert status2 == "COMPLETED"
+
+
+def test_export_watchlist_csv():
+    rows = [{
+        "anime_id": 101,
+        "title": "Steins;Gate",
+        "status": "COMPLETED",
+        "progress": 24,
+        "episodes": 24,
+        "score": 91,
+        "user_score": 99,
+        "genres": "Sci-Fi, Thriller",
+        "notes": "El Psy Kongroo",
+        "updated_at": "2026-10-27T12:00:00",
+    }]
+    csv_text = app.export_watchlist_csv(rows)
+    assert "Anime ID,Title,Status" in csv_text
+    assert "101,Steins;Gate,COMPLETED" in csv_text
+    assert "El Psy Kongroo" in csv_text
