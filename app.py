@@ -31,6 +31,8 @@ def _env_float(name: str, default: float) -> float:
 
 APP_NAME = "Otaku Orbit"
 APP_VERSION = "1.3.0"
+APP_URL = "https://otaku-orbit.streamlit.app/"
+SUPPORT_LINK = "https://discord.com/channels/@me/1252520070043668561/1562171196617785464"
 AUTHOR_CREDIT = "Made by Shashank — powered by Saiyan spirit"
 API_URL = os.getenv("ANILIST_API_URL", "https://graphql.anilist.co")
 DB_PATH = Path(os.getenv("OTAKU_ORBIT_DB_PATH", Path(__file__).with_name("anime_companion.db")))
@@ -166,6 +168,22 @@ def validate_backup_row(row: Any, index: int) -> dict[str, Any]:
             raise ValueError(f"Backup entry {index} has an invalid score.") from error
         if not 0 <= score <= 100:
             raise ValueError(f"Backup entry {index} has an invalid score.")
+    next_airing_at = row.get("next_airing_at")
+    if next_airing_at is not None:
+        try:
+            next_airing_at = int(next_airing_at)
+        except (TypeError, ValueError) as error:
+            raise ValueError(f"Backup entry {index} has an invalid airing timestamp.") from error
+        if next_airing_at <= 0:
+            raise ValueError(f"Backup entry {index} has an invalid airing timestamp.")
+    next_airing_episode = row.get("next_airing_episode")
+    if next_airing_episode is not None:
+        try:
+            next_airing_episode = int(next_airing_episode)
+        except (TypeError, ValueError) as error:
+            raise ValueError(f"Backup entry {index} has an invalid airing episode.") from error
+        if next_airing_episode <= 0:
+            raise ValueError(f"Backup entry {index} has an invalid airing episode.")
     return {
         "anime_id": anime_id,
         "title": title,
@@ -175,8 +193,8 @@ def validate_backup_row(row: Any, index: int) -> dict[str, Any]:
         "episodes": episodes,
         "score": score,
         "genres": str(row.get("genres", "")),
-        "next_airing_at": row.get("next_airing_at"),
-        "next_airing_episode": row.get("next_airing_episode"),
+        "next_airing_at": next_airing_at,
+        "next_airing_episode": next_airing_episode,
         "updated_at": row.get("updated_at", datetime.now().isoformat(timespec="seconds")),
     }
 
@@ -326,15 +344,35 @@ def format_airing(anime: dict[str, Any]) -> str:
     airing = anime.get("nextAiringEpisode")
     if not airing:
         return "No upcoming episode"
-    when = datetime.fromtimestamp(airing["airingAt"]).strftime("%d %b, %H:%M")
-    return f"Episode {airing['episode']} · {when}"
+    try:
+        airing_at = int(airing["airingAt"])
+        episode = int(airing["episode"])
+        if airing_at <= 0 or episode <= 0:
+            return "No upcoming episode"
+        when = datetime.fromtimestamp(airing_at).strftime("%d %b, %H:%M")
+    except (KeyError, TypeError, ValueError, OSError, OverflowError):
+        return "No upcoming episode"
+    return f"Episode {episode} · {when}"
 
 
 def format_row_airing(row: dict[str, Any]) -> str | None:
     if not row.get("next_airing_at"):
         return None
-    when = datetime.fromtimestamp(row["next_airing_at"]).strftime("%d %b, %H:%M")
-    return f"Episode {row.get('next_airing_episode', '?')} · {when}"
+    try:
+        airing_at = int(row["next_airing_at"])
+        if airing_at <= 0:
+            return None
+        when = datetime.fromtimestamp(airing_at).strftime("%d %b, %H:%M")
+    except (KeyError, TypeError, ValueError, OSError, OverflowError):
+        return None
+    episode = row.get("next_airing_episode", "?")
+    try:
+        episode = int(episode)
+        if episode <= 0:
+            episode = "?"
+    except (TypeError, ValueError):
+        episode = "?"
+    return f"Episode {episode} · {when}"
 
 
 @st.dialog("Anime details")
@@ -536,12 +574,20 @@ def main() -> None:
     .orbit-hero h1 {margin: .2rem 0 .4rem; font-size: clamp(2rem, 5vw, 3.5rem);}
     .orbit-muted {color: #aaa8bd; max-width: 700px;}
     .orbit-credit {position: fixed; bottom: 12px; left: 0; right: 0; text-align: center; color: #858297; font-size: .75rem; z-index: 999;}
+    @media (max-width: 768px) {
+        .block-container {padding: 1rem .75rem 4rem;}
+        .orbit-hero {padding: 1rem; border-radius: 16px;}
+        .orbit-hero h1 {font-size: 2rem; line-height: 1.1;}
+        .orbit-credit {font-size: .68rem; padding: 0 .5rem;}
+    }
     </style>""", unsafe_allow_html=True)
     rows = db_rows()
     saved_ids = {row["anime_id"] for row in rows}
     with st.sidebar:
         st.markdown("# Otaku Orbit")
         st.caption(f"Your personal anime command centre | v{APP_VERSION}")
+        st.link_button("Open live app", APP_URL, use_container_width=True)
+        st.link_button("Open community support", SUPPORT_LINK, use_container_width=True)
         page = st.radio("Navigate", ["Discover", "For you", "Seasonal", "Watchlist", "Statistics"], label_visibility="collapsed")
         st.divider()
         st.metric("Saved titles", len(rows))

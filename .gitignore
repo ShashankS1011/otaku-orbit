@@ -2,5 +2,7 @@ __pycache__/
 *.py[cod]
 .venv/
 anime_companion.db
+test_from_tool.txt
+try1.txt
 .streamlit/secrets.toml
 .vscode/

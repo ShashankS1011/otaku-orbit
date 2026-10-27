@@ -1,4 +1,7 @@
+import json
 import sqlite3
+from pathlib import Path
+from urllib.parse import urlparse
 
 import pytest
 import requests
@@ -10,6 +13,31 @@ def test_app_version_uses_semantic_versioning():
     parts = app.APP_VERSION.split(".")
     assert len(parts) == 3
     assert all(part.isdigit() for part in parts)
+
+
+def test_support_link_points_to_discord_thread():
+    assert app.SUPPORT_LINK == "https://discord.com/channels/@me/1252520070043668561/1562171196617785464"
+
+
+def test_live_app_link_points_to_streamlit_deployment():
+    assert app.APP_URL == "https://otaku-orbit.streamlit.app/"
+
+
+def test_external_links_are_https_urls():
+    for link in (app.APP_URL, app.SUPPORT_LINK):
+        parsed = urlparse(link)
+        assert parsed.scheme == "https"
+        assert parsed.netloc
+
+
+def test_streamlit_version_is_pinned_for_older_mobile_browsers():
+    requirements = Path(__file__).parents[1].joinpath("requirements.txt").read_text()
+    assert "streamlit>=1.49,<1.50" in requirements
+
+
+def test_mobile_css_breakpoint_is_present_in_app_source():
+    source = Path(app.__file__).read_text()
+    assert "@media (max-width: 768px)" in source
 
 
 @pytest.fixture
@@ -29,6 +57,21 @@ def test_display_title_prefers_english_then_romaji():
 def test_clean_description_normalizes_markup_and_whitespace():
     assert app.clean_description(" A<br>  story\nabout heroes. ") == "A story about heroes."
     assert app.clean_description(None) == "No synopsis available."
+
+
+def test_display_title_handles_missing_title_object():
+    assert app.display_title({}) == "Untitled"
+
+
+def test_format_airing_handles_missing_episode_data():
+    assert app.format_airing({}) == "No upcoming episode"
+    assert app.format_airing({"nextAiringEpisode": {"episode": 4}}) == "No upcoming episode"
+    assert app.format_airing({"nextAiringEpisode": {"airingAt": "bad", "episode": 4}}) == "No upcoming episode"
+
+
+def test_format_row_airing_handles_missing_airing_timestamp():
+    assert app.format_row_airing({"title": "No airing"}) is None
+    assert app.format_row_airing({"next_airing_at": "bad", "next_airing_episode": 4}) is None
 
 
 def test_watchlist_round_trip(isolated_db):
@@ -132,6 +175,54 @@ def test_load_with_fallback_returns_previous_session_result(monkeypatch):
 def test_import_watchlist_rejects_invalid_backup_entry(isolated_db):
     with pytest.raises(ValueError, match="invalid score"):
         app.import_watchlist('[{"anime_id": 7, "title": "Broken", "score": 101}]')
+
+
+@pytest.mark.parametrize(
+    ("payload", "message"),
+    [
+        ('{"anime_id": 7}', "must contain a list"),
+        ('[{"anime_id": 0, "title": "Broken"}]', "invalid id"),
+        ('[{"anime_id": 7, "title": "Broken", "progress": -1}]', "invalid id"),
+        ('[{"anime_id": 7, "title": "Broken", "episodes": -1}]', "invalid episode count"),
+    ],
+)
+def test_import_watchlist_rejects_malformed_payloads(isolated_db, payload, message):
+    with pytest.raises(ValueError, match=message):
+        app.import_watchlist(payload)
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "message"),
+    [
+        ("next_airing_at", "bad", "invalid airing timestamp"),
+        ("next_airing_at", 0, "invalid airing timestamp"),
+        ("next_airing_episode", "bad", "invalid airing episode"),
+        ("next_airing_episode", 0, "invalid airing episode"),
+    ],
+)
+def test_import_watchlist_rejects_invalid_airing_metadata(isolated_db, field, value, message):
+    payload = [{"anime_id": 7, "title": "Broken", field: value}]
+    with pytest.raises(ValueError, match=message):
+        app.import_watchlist(json.dumps(payload))
+
+
+def test_anilist_query_raises_on_http_error_without_retrying(monkeypatch):
+    calls = []
+
+    class Response:
+        status_code = 400
+
+        def raise_for_status(self):
+            raise requests.HTTPError("bad request")
+
+    def post(*args, **kwargs):
+        calls.append(1)
+        return Response()
+
+    monkeypatch.setattr(app.requests, "post", post)
+    with pytest.raises(requests.HTTPError, match="bad request"):
+        app.anilist_query("bad-request")
+    assert len(calls) == 1
 
 
 def test_init_db_migrates_legacy_airing_columns(tmp_path, monkeypatch):
