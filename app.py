@@ -410,6 +410,23 @@ def clean_description(text: str | None) -> str:
     return " ".join(text.replace("<br>", " ").split())
 
 
+def calculate_runtime_display(episodes: int | None, duration_mins: int | None = None, progress: int = 0) -> str:
+    if not episodes or episodes <= 0:
+        return "Runtime unknown"
+    duration = duration_mins if duration_mins and duration_mins > 0 else 24
+    total_minutes = episodes * duration
+    hours = total_minutes // 60
+    mins = total_minutes % 60
+    runtime_str = f"{hours}h {mins}m" if hours > 0 else f"{mins}m"
+    if 0 < progress < episodes:
+        remaining_minutes = max(0, (episodes - progress) * duration)
+        rem_hours = remaining_minutes // 60
+        rem_mins = remaining_minutes % 60
+        rem_str = f"{rem_hours}h {rem_mins}m" if rem_hours > 0 else f"{rem_mins}m"
+        return f"{runtime_str} total ({rem_str} left)"
+    return f"{runtime_str} total"
+
+
 def format_airing(anime: dict[str, Any]) -> str:
     airing = anime.get("nextAiringEpisode")
     if not airing:
@@ -470,7 +487,7 @@ def show_anime_details(anime_id: int) -> None:
         st.image(anime["coverImage"]["large"], width=220)
     st.caption(f"{anime.get('format', 'ANIME')} · {anime.get('status', 'UNKNOWN')} · {anime.get('averageScore') or '—'}/100")
     st.write(clean_description(anime.get("description")))
-    st.write(f"**Episodes:** {anime.get('episodes') or 'Unknown'} · **Duration:** {anime.get('duration') or 'Unknown'} min")
+    st.write(f"**Episodes:** {anime.get('episodes') or 'Unknown'} · **Duration:** {anime.get('duration') or 'Unknown'} min · **Est. watch time:** {calculate_runtime_display(anime.get('episodes'), anime.get('duration'))}")
     studios = [studio["name"] for studio in anime.get("studios", {}).get("nodes", [])]
     if studios:
         st.write("**Studio:** " + ", ".join(studios))
@@ -570,7 +587,8 @@ def render_watchlist() -> None:
             progress = row["progress"]
             st.progress(min(progress / total, 1.0) if total else 0.0, text=f"Episode {progress}/{total or '?'}")
             user_score_display = f"{row['user_score']}/100" if row.get("user_score") else "Not rated"
-            st.caption(f"AniList: {row['score'] or '—'}  ·  My score: {user_score_display}  ·  {row['genres'] or 'Genre unknown'}")
+            time_left = calculate_runtime_display(row["episodes"], 24, progress=progress)
+            st.caption(f"AniList: {row['score'] or '—'}  ·  My score: {user_score_display}  ·  {time_left}  ·  {row['genres'] or 'Genre unknown'}")
             if row.get("notes"):
                 st.caption(f"Notes: {row['notes']}")
         with right:

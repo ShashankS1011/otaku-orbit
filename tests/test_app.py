@@ -314,3 +314,11 @@ def test_export_watchlist_csv():
     assert "Anime ID,Title,Status" in csv_text
     assert "101,Steins;Gate,COMPLETED" in csv_text
     assert "El Psy Kongroo" in csv_text
+
+
+def test_calculate_runtime_display():
+    assert app.calculate_runtime_display(None) == "Runtime unknown"
+    assert app.calculate_runtime_display(0) == "Runtime unknown"
+    assert app.calculate_runtime_display(12, 24) == "4h 48m total"
+    assert app.calculate_runtime_display(12, 24, progress=6) == "4h 48m total (2h 24m left)"
+    assert app.calculate_runtime_display(1, 45) == "45m total"
