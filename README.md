@@ -6,6 +6,8 @@
 
 **Made by Shashank — powered by Saiyan spirit**
 
+[Open the live Streamlit app](https://otaku-orbit.streamlit.app/)
+
 Current version: `1.3.0`
 
 ## Deploy on Streamlit Community Cloud
@@ -17,7 +19,7 @@ After signing in with GitHub, create a new app with these settings:
 - **Repository:** `ShashankS1011/otaku-orbit`
 - **Branch:** `main`
 - **Main file path:** `app.py`
-- **App URL:** choose `otaku-orbit` if it is available
+- **App URL:** https://otaku-orbit.streamlit.app/
 
 Streamlit will build the app from this repository and provide a public `streamlit.app` URL. Future pushes to `main` will automatically update the deployed app.
 
@@ -67,6 +69,14 @@ GitHub Actions runs tests, syntax checks, and Ruff for every push and pull reque
 2. Run the test, compile, and Ruff commands above.
 3. Update the current version in this README.
 4. Push a release branch and merge it through a passing pull request.
+
+## Contributors
+
+- [butteryjam](https://github.com/butteryjam) — reported the mobile browser compatibility issue.
+
+## Community support
+
+[Open the Otaku Orbit support thread on Discord](https://discord.com/channels/@me/1252520070043668561/1562171196617785464)
 
 ## Versioning
 
