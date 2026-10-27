@@ -268,6 +268,13 @@ def fetch_anime_detail(anime_id: int) -> dict[str, Any] | None:
     return payload[0] if payload else None
 
 
+def current_season_and_year(today: date | None = None) -> tuple[str, int]:
+    today = today or date.today()
+    month = today.month
+    season = "WINTER" if month in (12, 1, 2) else "SPRING" if month in (3, 4, 5) else "SUMMER" if month in (6, 7, 8) else "FALL"
+    return season, today.year
+
+
 def fetch_anime(search: str = "", season: str | None = None, year: int | None = None,
                 page: int = 1, is_adult: bool | None = False) -> list[dict[str, Any]]:
     results, _ = fetch_anime_page(search, season, year, page, is_adult=is_adult)
@@ -661,13 +668,16 @@ def main() -> None:
             with st.container(border=True):
                 render_card(anime, saved_ids, "discover")
     else:
-        now = date.today()
-        month = now.month
-        season = "WINTER" if month in (12, 1, 2) else "SPRING" if month in (3, 4, 5) else "SUMMER" if month in (6, 7, 8) else "FALL"
-        st.title(f"{season.title()} {now.year}")
-        st.write("Keep up with the shows everyone will be talking about this season.")
+        curr_season, curr_year = current_season_and_year()
+        season_cols = st.columns([1, 1, 2])
+        season_names = ["WINTER", "SPRING", "SUMMER", "FALL"]
+        season = season_cols[0].selectbox("Season", season_names, index=season_names.index(curr_season), key="seasonal-season")
+        years = list(range(curr_year + 1, curr_year - 6, -1))
+        year = season_cols[1].selectbox("Year", years, index=years.index(curr_year) if curr_year in years else 1, key="seasonal-year")
+        st.title(f"{season.title()} {year}")
+        st.write(f"Explore the anime lineup for {season.title()} {year}.")
         try:
-            results = fetch_anime(season=season, year=now.year)
+            results = fetch_anime(season=season, year=year)
         except (requests.RequestException, RuntimeError) as error:
             st.error(f"Could not load the seasonal lineup: {error}")
             results = []

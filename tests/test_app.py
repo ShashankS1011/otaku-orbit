@@ -253,3 +253,12 @@ def test_fetch_anime_page_passes_is_adult_variable(monkeypatch):
 
     app.fetch_anime_page("hero", is_adult=False)
     assert recorded.get("isAdult") is False
+
+
+def test_current_season_and_year_mapping():
+    from datetime import date
+    assert app.current_season_and_year(date(2026, 1, 15)) == ("WINTER", 2026)
+    assert app.current_season_and_year(date(2026, 4, 1)) == ("SPRING", 2026)
+    assert app.current_season_and_year(date(2026, 7, 20)) == ("SUMMER", 2026)
+    assert app.current_season_and_year(date(2026, 10, 5)) == ("FALL", 2026)
+    assert app.current_season_and_year(date(2026, 12, 31)) == ("WINTER", 2026)
