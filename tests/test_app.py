@@ -284,3 +284,14 @@ def test_update_progress_sets_notes(isolated_db):
     app.update_progress(888, 10, "WATCHING", notes="Masterpiece so far")
     row = app.db_rows()[0]
     assert row["notes"] == "Masterpiece so far"
+
+
+def test_increment_watchlist_progress_and_auto_completion(isolated_db):
+    app.save_anime({"id": 777, "title": {"english": "Frieren"}, "episodes": 2}, status="PLANNING")
+    prog, status = app.increment_watchlist_progress(777)
+    assert prog == 1
+    assert status == "WATCHING"
+
+    prog2, status2 = app.increment_watchlist_progress(777)
+    assert prog2 == 2
+    assert status2 == "COMPLETED"

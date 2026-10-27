@@ -142,6 +142,27 @@ def update_progress(anime_id: int, progress: int, status: str, user_score: int |
                            (progress, status, notes, datetime.now().isoformat(timespec="seconds"), anime_id))
 
 
+def increment_watchlist_progress(anime_id: int) -> tuple[int, str]:
+    with sqlite3.connect(DB_PATH) as connection:
+        connection.row_factory = sqlite3.Row
+        row = connection.execute("SELECT progress, episodes, status FROM watchlist WHERE anime_id=?", (anime_id,)).fetchone()
+        if not row:
+            raise ValueError(f"Anime ID {anime_id} not found in watchlist.")
+        progress = int(row["progress"]) + 1
+        total = row["episodes"]
+        status = row["status"]
+        if total and progress >= total:
+            progress = total
+            status = "COMPLETED"
+        elif status == "PLANNING":
+            status = "WATCHING"
+        connection.execute(
+            "UPDATE watchlist SET progress=?, status=?, updated_at=? WHERE anime_id=?",
+            (progress, status, datetime.now().isoformat(timespec="seconds"), anime_id),
+        )
+        return progress, status
+
+
 def remove_anime(anime_id: int) -> None:
     with sqlite3.connect(DB_PATH) as connection:
         connection.execute("DELETE FROM watchlist WHERE anime_id=?", (anime_id,))
@@ -539,11 +560,14 @@ def render_watchlist() -> None:
             my_score = st.number_input("My rating (0-100)", min_value=0, max_value=100,
                                        value=int(row.get("user_score") or 0), key=f"userscore-{row['anime_id']}")
             notes_val = st.text_input("Notes", value=row.get("notes") or "", placeholder="Thoughts, reviews…", key=f"notes-{row['anime_id']}")
-            a, b = st.columns(2)
-            if a.button("Save", key=f"save-{row['anime_id']}", use_container_width=True):
+            a, b, c = st.columns([1, 1, 1])
+            if a.button("+1 Ep", key=f"inc-{row['anime_id']}", use_container_width=True):
+                increment_watchlist_progress(row["anime_id"])
+                st.rerun()
+            if b.button("Save", key=f"save-{row['anime_id']}", use_container_width=True):
                 update_progress(row["anime_id"], int(new_progress), status, user_score=int(my_score) if my_score > 0 else None, notes=notes_val.strip())
                 st.rerun()
-            if b.button("Remove", key=f"remove-{row['anime_id']}", use_container_width=True):
+            if c.button("Remove", key=f"remove-{row['anime_id']}", use_container_width=True):
                 remove_anime(row["anime_id"])
                 st.rerun()
         st.divider()
