@@ -262,3 +262,10 @@ def test_current_season_and_year_mapping():
     assert app.current_season_and_year(date(2026, 7, 20)) == ("SUMMER", 2026)
     assert app.current_season_and_year(date(2026, 10, 5)) == ("FALL", 2026)
     assert app.current_season_and_year(date(2026, 12, 31)) == ("WINTER", 2026)
+
+
+def test_format_trailer_url_youtube():
+    assert app.format_trailer_url({"site": "youtube", "id": "abc123xyz"}) == "https://www.youtube.com/watch?v=abc123xyz"
+    assert app.format_trailer_url({"site": "dailymotion", "id": "123"}) is None
+    assert app.format_trailer_url(None) is None
+    assert app.format_trailer_url({}) is None

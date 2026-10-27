@@ -52,7 +52,7 @@ query ($search: String, $season: MediaSeason, $seasonYear: Int, $page: Int, $isA
     pageInfo { hasNextPage }
     media(search: $search, season: $season, seasonYear: $seasonYear, isAdult: $isAdult,
           type: ANIME, sort: POPULARITY_DESC) {
-      id title { romaji english native } coverImage { large }
+      id siteUrl title { romaji english native } coverImage { large } trailer { id site }
       description(asHtml: false) episodes duration status
       averageScore popularity genres season seasonYear format isAdult
       nextAiringEpisode { airingAt episode }
@@ -65,7 +65,7 @@ query ($search: String, $season: MediaSeason, $seasonYear: Int, $page: Int, $isA
 DETAIL_QUERY = """
 query ($id: Int) {
   Media(id: $id, type: ANIME) {
-    id title { romaji english native } coverImage { large }
+    id siteUrl title { romaji english native } coverImage { large } trailer { id site }
     description(asHtml: false) episodes duration status averageScore genres
     season seasonYear format isAdult nextAiringEpisode { airingAt episode }
     studios(isMain: true) { nodes { name } }
@@ -78,7 +78,7 @@ query ($id: Int) {
 TRENDING_QUERY = """
 query { Page(page: 1, perPage: 24) {
   media(type: ANIME, sort: TRENDING_DESC) {
-    id title { romaji english native } coverImage { large }
+    id siteUrl title { romaji english native } coverImage { large } trailer { id site }
     description(asHtml: false) episodes duration status averageScore popularity genres
     season seasonYear format isAdult nextAiringEpisode { airingAt episode }
     studios(isMain: true) { nodes { name } }
@@ -382,6 +382,16 @@ def format_row_airing(row: dict[str, Any]) -> str | None:
     return f"Episode {episode} · {when}"
 
 
+def format_trailer_url(trailer: dict[str, Any] | None) -> str | None:
+    if not trailer or not isinstance(trailer, dict):
+        return None
+    site = str(trailer.get("site", "")).lower()
+    trailer_id = trailer.get("id")
+    if site == "youtube" and trailer_id:
+        return f"https://www.youtube.com/watch?v={trailer_id}"
+    return None
+
+
 @st.dialog("Anime details")
 def show_anime_details(anime_id: int) -> None:
     try:
@@ -407,6 +417,12 @@ def show_anime_details(anime_id: int) -> None:
     staff = [item["name"]["full"] for item in anime.get("staff", {}).get("nodes", [])]
     if staff:
         st.caption("Staff: " + ", ".join(staff))
+    site_url = anime.get("siteUrl") or f"https://anilist.co/anime/{anime_id}"
+    trailer_url = format_trailer_url(anime.get("trailer"))
+    btn_cols = st.columns(2 if trailer_url else 1)
+    btn_cols[0].link_button("View on AniList", site_url, use_container_width=True)
+    if trailer_url:
+        btn_cols[1].link_button("Watch Trailer", trailer_url, use_container_width=True)
 
 
 def render_card(anime: dict[str, Any], saved_ids: set[int], key_prefix: str) -> None:
