@@ -378,7 +378,7 @@ def update_progress(
             set_clauses.append("tags=?")
             params.append(tags)
         params.append(anime_id)
-        connection.execute(f"UPDATE watchlist SET {', '.join(set_clauses)} WHERE anime_id=?", params)
+        connection.execute(f"UPDATE watchlist SET {', '.join(set_clauses)} WHERE anime_id=?", params)  # nosec B608
 
 
 def batch_update_status(anime_ids: list[int], status: str, owner_id: str | None = None) -> None:
@@ -388,7 +388,7 @@ def batch_update_status(anime_ids: list[int], status: str, owner_id: str | None 
         now = datetime.now().isoformat(timespec="seconds")
         placeholders = ",".join("?" * len(anime_ids))
         connection.execute(
-            f"UPDATE watchlist SET status=?, updated_at=? WHERE anime_id IN ({placeholders})",
+            f"UPDATE watchlist SET status=?, updated_at=? WHERE anime_id IN ({placeholders})",  # nosec B608
             [status, now, *anime_ids],
         )
 
@@ -398,7 +398,7 @@ def batch_remove_anime(anime_ids: list[int], owner_id: str | None = None) -> Non
         return
     with sqlite3.connect(database_path_for_owner(owner_id), timeout=15) as connection:
         placeholders = ",".join("?" * len(anime_ids))
-        connection.execute(f"DELETE FROM watchlist WHERE anime_id IN ({placeholders})", anime_ids)
+        connection.execute(f"DELETE FROM watchlist WHERE anime_id IN ({placeholders})", anime_ids)  # nosec B608
 
 
 def batch_add_tag(anime_ids: list[int], tag: str, owner_id: str | None = None) -> None:
@@ -409,7 +409,8 @@ def batch_add_tag(anime_ids: list[int], tag: str, owner_id: str | None = None) -
         connection.row_factory = sqlite3.Row
         placeholders = ",".join("?" * len(anime_ids))
         rows = connection.execute(
-            f"SELECT anime_id, tags FROM watchlist WHERE anime_id IN ({placeholders})", anime_ids
+            f"SELECT anime_id, tags FROM watchlist WHERE anime_id IN ({placeholders})",  # nosec B608
+            anime_ids,
         ).fetchall()
         now = datetime.now().isoformat(timespec="seconds")
         for row in rows:
@@ -1244,8 +1245,9 @@ def render_watchlist(owner_id: str | None = None) -> None:
         rows.sort(key=lambda row: row["progress"], reverse=True)
     elif sort_order == "Runtime remaining":
         rows.sort(
-            key=lambda row: max((row.get("episodes") or row["progress"]) - row["progress"], 0)
-            * (row.get("duration") or 24)
+            key=lambda row: (
+                max((row.get("episodes") or row["progress"]) - row["progress"], 0) * (row.get("duration") or 24)
+            )
         )
     active = [row for row in rows if row["status"] in {"WATCHING", "REWATCHING"}]
     goal = st.session_state.get("daily_goal", 3)
