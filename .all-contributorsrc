@@ -1,0 +1,33 @@
+{
+  "projectName": "otaku-orbit",
+  "projectOwner": "ShashankS1011",
+  "repoType": "github",
+  "repoHost": "https://github.com",
+  "files": [],
+  "imageSize": 100,
+  "commit": false,
+  "contributors": [
+    {
+      "login": "ShashankS1011",
+      "name": "Shashank",
+      "avatar_url": "https://avatars.githubusercontent.com/u/125252007",
+      "profile": "https://github.com/ShashankS1011",
+      "contributions": [
+        "code",
+        "design",
+        "maintenance",
+        "doc"
+      ]
+    },
+    {
+      "login": "Butteryjam",
+      "name": "Vishaal S",
+      "avatar_url": "https://avatars.githubusercontent.com/u/137900431?v=4",
+      "profile": "https://github.com/Butteryjam",
+      "contributions": [
+        "bug"
+      ]
+    }
+  ],
+  "contributorsPerLine": 7
+}
