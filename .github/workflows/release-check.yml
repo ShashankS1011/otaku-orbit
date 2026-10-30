@@ -1,0 +1,39 @@
+name: Release Verification
+
+on:
+  push:
+    tags:
+      - "v*"
+  pull_request:
+    paths:
+      - "app.py"
+      - "README.md"
+      - "CHANGELOG.md"
+
+jobs:
+  verify-release:
+    name: Verify Version and Consistency
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Verify version consistency across files
+        run: |
+          python -c "
+          import re
+
+          with open('app.py') as f:
+              app_ver = re.search(r'APP_VERSION = \"([^\"]+)\"', f.read()).group(1)
+
+          with open('README.md') as f:
+              readme_ver = re.search(r'Current version: \`([^\`]+)\`', f.read()).group(1)
+
+          with open('CHANGELOG.md') as f:
+              changelog = f.read()
+
+          assert app_ver == readme_ver, f'Version mismatch: app.py ({app_ver}) vs README.md ({readme_ver})'
+          assert f'## {app_ver}' in changelog, f'CHANGELOG.md missing release section for {app_ver}'
+          print(f'Release verification passed for version {app_ver}')
+          "
