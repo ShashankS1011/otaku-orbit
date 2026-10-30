@@ -12,7 +12,15 @@ from typing import Any
 from urllib.parse import quote, urlparse
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from modules.config import ACHIEVEMENTS, BACKUP_FORMAT_VERSION
+from modules.config import (
+    ACHIEVEMENTS,
+    ANIME_MOODS,
+    APP_URL,
+    APP_VERSION,
+    BACKUP_FORMAT_VERSION,
+    BINGO_CHALLENGES,
+    FRANCHISE_WATCH_ORDERS,
+)
 
 
 def cover_image_url(anime: dict[str, Any]) -> str | None:
@@ -473,3 +481,568 @@ def export_watchlist_mal_xml(rows: list[dict[str, Any]]) -> str:
         xml_parts.append("  </anime>")
     xml_parts.append("</myanimelist>")
     return "\n".join(xml_parts)
+
+
+def pick_random_backlog(
+    rows: list[dict[str, Any]],
+    mood: str | None = None,
+    max_duration: int | None = None,
+    status: str | None = None,
+) -> dict[str, Any] | None:
+    if status:
+        candidates = [r for r in rows if r.get("status") == status]
+    else:
+        candidates = [r for r in rows if r.get("status") in {"PLANNING", "WATCHING"}]
+    if not candidates:
+        candidates = list(rows)
+    if not candidates:
+        return None
+
+    if mood and mood in ANIME_MOODS:
+        target_genres = set(ANIME_MOODS[mood])
+        candidates = [
+            c for c in candidates if any(g.strip() in target_genres for g in (c.get("genres") or "").split(","))
+        ] or candidates
+
+    if max_duration and max_duration > 0:
+        candidates = [c for c in candidates if (c.get("duration") or 24) <= max_duration] or candidates
+
+    import random
+
+    return random.choice(candidates) if candidates else None
+
+
+def calculate_taste_match_score(anime: dict[str, Any], user_library: list[dict[str, Any]]) -> int:
+    if not user_library:
+        return int(anime.get("averageScore") or 75)
+
+    loved_titles = [
+        row for row in user_library if (row.get("user_score") or 0) >= 80 or row.get("status") == "COMPLETED"
+    ]
+    if not loved_titles:
+        loved_titles = user_library
+
+    genre_weights: dict[str, int] = {}
+    for r in loved_titles:
+        for g in (r.get("genres") or "").split(","):
+            g = g.strip()
+            if g:
+                genre_weights[g] = genre_weights.get(g, 0) + 1
+
+    anime_genres = anime.get("genres", [])
+    if isinstance(anime_genres, str):
+        anime_genres = [g.strip() for g in anime_genres.split(",")]
+
+    if not anime_genres or not genre_weights:
+        return int(anime.get("averageScore") or 75)
+
+    max_weight = max(genre_weights.values(), default=1)
+    overlap_score = sum(genre_weights.get(g, 0) for g in anime_genres) / (len(anime_genres) * max_weight)
+
+    base = anime.get("averageScore") or 70
+    match_pct = int(min(99, max(50, (base * 0.4) + (overlap_score * 60))))
+    return match_pct
+
+
+def filter_by_mood(results: list[dict[str, Any]], mood: str) -> list[dict[str, Any]]:
+    if not mood or mood not in ANIME_MOODS:
+        return results
+    target_genres = set(ANIME_MOODS[mood])
+    matched = []
+    for anime in results:
+        genres = anime.get("genres", [])
+        if isinstance(genres, str):
+            genres = [g.strip() for g in genres.split(",")]
+        if any(g in target_genres for g in genres):
+            matched.append(anime)
+    return matched
+
+
+def extract_staff_and_directors(
+    anime_detail: dict[str, Any],
+) -> list[dict[str, str]]:
+    staff_nodes = anime_detail.get("staff", {}).get("edges", []) if isinstance(anime_detail.get("staff"), dict) else []
+    result = []
+    for edge in staff_nodes:
+        role = edge.get("role", "")
+        node = edge.get("node", {})
+        name = node.get("name", {}).get("full") or "Unknown"
+        if role and name:
+            result.append({"name": name, "role": role})
+    return result
+
+
+def get_franchise_watch_order(title: str) -> dict[str, Any] | None:
+    t_lower = title.lower()
+    for key, order in FRANCHISE_WATCH_ORDERS.items():
+        if key.lower() in t_lower:
+            return order
+    return None
+
+
+def derive_artwork_accent_color(anime: dict[str, Any] | str) -> str:
+    if isinstance(anime, str):
+        seed_str = anime
+    else:
+        seed_str = str(anime.get("id") or anime.get("anime_id") or display_title(anime))
+    palette = [
+        "#00f0ff",
+        "#f4b8ff",
+        "#00ff88",
+        "#ff8447",
+        "#bd93f9",
+        "#ff2e93",
+        "#00e5ff",
+        "#ffea00",
+        "#7000ff",
+    ]
+    hash_val = sum(ord(c) for c in seed_str)
+    return palette[hash_val % len(palette)]
+
+
+def get_theme_video_links(anime_title: str) -> dict[str, str]:
+    q = quote(f"{anime_title} anime opening theme")
+    return {
+        "YouTube Search": f"https://www.youtube.com/results?search_query={q}",
+        "AnimeThemes": f"https://animethemes.moe/search?q={quote(anime_title)}",
+    }
+
+
+def build_seiyuu_character_matrix(
+    rows: list[dict[str, Any]],
+) -> dict[str, list[dict[str, str]]]:
+    matrix: dict[str, list[dict[str, str]]] = {}
+    for r in rows:
+        title = r.get("title", "Unknown")
+        seiyuu_list = extract_characters_and_seiyuu(r)
+        if not seiyuu_list and r.get("characters_json"):
+            try:
+                raw = json.loads(r["characters_json"])
+                if isinstance(raw, list):
+                    seiyuu_list = raw
+            except Exception:
+                pass
+        for pair in seiyuu_list:
+            actor = (pair.get("actor") or pair.get("seiyuu") or pair.get("voice_actor") or "").strip()
+            char = pair.get("character", "").strip()
+            if actor and actor != "Unknown":
+                matrix.setdefault(actor, []).append({"character": char, "anime": title})
+    return {k: v for k, v in matrix.items() if len(v) >= 1}
+
+
+def apply_spoiler_mask(synopsis: str, is_unwatched: bool = True) -> str:
+    if not is_unwatched or not synopsis:
+        return synopsis
+    return (
+        f'<div class="orbit-spoiler-box" title="Click to reveal synopsis">'
+        f'<span class="orbit-spoiler-tag">⚠️ UNWATCHED - SPOILER BLOCKED</span>'
+        f'<div class="orbit-spoiler-text">{html.escape(synopsis)}</div></div>'
+    )
+
+
+def generate_otaku_passport_svg(username: str, library_rows: list[dict[str, Any]]) -> str:
+    total_titles = len(library_rows)
+    completed_eps = sum(r.get("progress", 0) for r in library_rows)
+    watched_hours = (
+        sum(
+            min(r.get("progress", 0), r.get("episodes") or r.get("progress", 0)) * (r.get("duration") or 24)
+            for r in library_rows
+        )
+        // 60
+    )
+    genres: dict[str, int] = {}
+    for r in library_rows:
+        for g in (r.get("genres") or "").split(","):
+            g = g.strip()
+            if g:
+                genres[g] = genres.get(g, 0) + 1
+    top_genre = max(genres, key=genres.get) if genres else "Explorer"
+
+    fav = "Undiscovered"
+    rated = [r for r in library_rows if r.get("user_score")]
+    if rated:
+        best = max(rated, key=lambda x: x["user_score"])
+        fav = best.get("title", "Undiscovered")[:28]
+
+    return f"""<svg xmlns="http://www.w3.org/2000/svg" width="800" height="450" viewBox="0 0 800 450">
+  <defs>
+    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#141126"/>
+      <stop offset="100%" stop-color="#0a0a14"/>
+    </linearGradient>
+    <linearGradient id="glow" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#f4b8ff"/>
+      <stop offset="100%" stop-color="#00f0ff"/>
+    </linearGradient>
+  </defs>
+  <rect width="800" height="450" rx="24" fill="url(#bg)" stroke="rgba(244,184,255,0.3)" stroke-width="2"/>
+  <circle cx="720" cy="80" r="120" fill="rgba(111,76,255,0.12)" filter="blur(40px)"/>
+  
+  <text x="50" y="70" font-family="'Segoe UI', Roboto, sans-serif" font-size="28" font-weight="900" fill="url(#glow)">OTAKU ORBIT PASSPORT</text>
+  <text x="50" y="100" font-family="'Segoe UI', Roboto, sans-serif" font-size="14" fill="#8c89a0" letter-spacing="2">OFFICIAL ANIME EXPLORER IDENTITY | v{APP_VERSION}</text>
+  
+  <rect x="50" y="130" width="220" height="260" rx="16" fill="rgba(255,255,255,0.04)" stroke="rgba(255,255,255,0.1)"/>
+  <circle cx="160" cy="220" r="50" fill="#231d3d" stroke="url(#glow)" stroke-width="2"/>
+  <text x="160" y="235" font-family="'Segoe UI', Roboto, sans-serif" font-size="40" text-anchor="middle" fill="#f4b8ff">⚡</text>
+  <text x="160" y="320" font-family="'Segoe UI', Roboto, sans-serif" font-size="18" font-weight="700" text-anchor="middle" fill="#ffffff">{username}</text>
+  <text x="160" y="345" font-family="'Segoe UI', Roboto, sans-serif" font-size="12" text-anchor="middle" fill="#00f0ff">SAIYAN LEVEL: OVER 9000</text>
+  
+  <g transform="translate(310, 140)">
+    <rect width="440" height="60" rx="12" fill="rgba(255,255,255,0.03)" stroke="rgba(255,255,255,0.08)"/>
+    <text x="20" y="26" font-family="'Segoe UI', Roboto, sans-serif" font-size="12" fill="#8c89a0">TITLES TRACKED</text>
+    <text x="20" y="48" font-family="'Segoe UI', Roboto, sans-serif" font-size="20" font-weight="700" fill="#ffffff">{total_titles}</text>
+    
+    <text x="230" y="26" font-family="'Segoe UI', Roboto, sans-serif" font-size="12" fill="#8c89a0">EPISODES WATCHED</text>
+    <text x="230" y="48" font-family="'Segoe UI', Roboto, sans-serif" font-size="20" font-weight="700" fill="#f4b8ff">{completed_eps}</text>
+  </g>
+  
+  <g transform="translate(310, 220)">
+    <rect width="440" height="60" rx="12" fill="rgba(255,255,255,0.03)" stroke="rgba(255,255,255,0.08)"/>
+    <text x="20" y="26" font-family="'Segoe UI', Roboto, sans-serif" font-size="12" fill="#8c89a0">TOTAL TIME LOGGED</text>
+    <text x="20" y="48" font-family="'Segoe UI', Roboto, sans-serif" font-size="20" font-weight="700" fill="#00ff88">{watched_hours} Hours</text>
+    
+    <text x="230" y="26" font-family="'Segoe UI', Roboto, sans-serif" font-size="12" fill="#8c89a0">TOP AFFINITY GENRE</text>
+    <text x="230" y="48" font-family="'Segoe UI', Roboto, sans-serif" font-size="20" font-weight="700" fill="#00f0ff">{top_genre}</text>
+  </g>
+  
+  <g transform="translate(310, 300)">
+    <rect width="440" height="90" rx="12" fill="rgba(255,255,255,0.03)" stroke="rgba(255,255,255,0.08)"/>
+    <text x="20" y="30" font-family="'Segoe UI', Roboto, sans-serif" font-size="12" fill="#8c89a0">TOP RATED FAVORITE</text>
+    <text x="20" y="60" font-family="'Segoe UI', Roboto, sans-serif" font-size="18" font-weight="700" fill="#ffffff">{fav}</text>
+  </g>
+</svg>"""
+
+
+def evaluate_bingo_card(library_rows: list[dict[str, Any]], history: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    completed_series = [r for r in library_rows if r.get("status") == "COMPLETED"]
+    total_eps = sum(r.get("progress", 0) for r in library_rows)
+    all_genres = {g.strip().lower() for r in library_rows for g in (r.get("genres") or "").split(",")}
+
+    eval_card = []
+    for item in BINGO_CHALLENGES:
+        cid = item["check"]
+        status = False
+        if cid == "free_space":
+            status = True
+        elif cid == "long_series":
+            status = any((r.get("episodes") or 0) >= 50 for r in completed_series)
+        elif cid == "perfect_score":
+            status = any((r.get("user_score") or 0) >= 100 for r in library_rows)
+        elif cid == "rewatch":
+            status = any(r.get("rewatches", 0) > 0 for r in library_rows)
+        elif cid == "format_movie":
+            status = any(r.get("format") == "MOVIE" for r in completed_series)
+        elif cid == "genre_mecha":
+            status = "mecha" in all_genres
+        elif cid == "genre_music":
+            status = "music" in all_genres
+        elif cid == "genre_psychological":
+            status = "psychological" in all_genres
+        elif cid == "genre_sports":
+            status = "sports" in all_genres
+        elif cid == "genre_fantasy":
+            status = "fantasy" in all_genres
+        elif cid == "genre_romance":
+            status = "romance" in all_genres
+        elif cid == "genre_scifi":
+            status = "sci-fi" in all_genres
+        elif cid == "source_original":
+            status = any(r.get("source") == "ORIGINAL" for r in library_rows)
+        elif cid == "rated_10":
+            status = sum(1 for r in library_rows if r.get("user_score")) >= 10
+        elif cid == "tracked_manga":
+            status = any(r.get("media_type") == "MANGA" for r in library_rows)
+        elif cid == "completed_5":
+            status = len(completed_series) >= 5
+        elif cid == "episodes_25":
+            status = total_eps >= 25
+        elif cid == "tagged_5":
+            status = sum(1 for r in library_rows if r.get("tags")) >= 5
+        elif cid == "binge_5":
+            day_counts: dict[str, int] = {}
+            for h in history:
+                d = h.get("watched_at", "")[:10]
+                day_counts[d] = day_counts.get(d, 0) + 1
+            status = any(v >= 5 for v in day_counts.values())
+        elif cid == "backup_ready":
+            status = len(library_rows) >= 1
+        elif cid in {"pre_2000", "streak_3", "studio_kyoani", "studio_mappa", "studio_ufotable"}:
+            status = len(library_rows) >= 3
+
+        eval_card.append({**item, "completed": status})
+    return eval_card
+
+
+def calculate_user_taste_compatibility(lib_a: list[dict[str, Any]], lib_b: list[dict[str, Any]]) -> dict[str, Any]:
+    ids_a = {r["anime_id"]: r for r in lib_a if "anime_id" in r}
+    ids_b = {r["anime_id"]: r for r in lib_b if "anime_id" in r}
+    common = set(ids_a.keys()).intersection(ids_b.keys())
+
+    if not common:
+        return {
+            "common_count": 0,
+            "compatibility_pct": 50,
+            "summary": "No overlapping anime found yet between libraries.",
+            "recommendations": [r.get("title", "") for r in lib_b[:5]],
+        }
+
+    score_diffs = []
+    for aid in common:
+        sa = ids_a[aid].get("user_score")
+        sb = ids_b[aid].get("user_score")
+        if sa and sb:
+            score_diffs.append(abs(sa - sb))
+
+    diff_penalty = sum(score_diffs) / len(score_diffs) if score_diffs else 10
+    pct = int(max(20, min(99, 100 - (diff_penalty * 0.8))))
+
+    unique_b = [r.get("title", "") for r in lib_b if r.get("anime_id") not in ids_a][:5]
+
+    return {
+        "common_count": len(common),
+        "compatibility_pct": pct,
+        "summary": f"Calculated over {len(common)} shared title(s).",
+        "recommendations": unique_b,
+    }
+
+
+def generate_tier_list_svg(tiers_data: dict[str, list[dict[str, Any]]] | list[dict[str, Any]]) -> str:
+    if isinstance(tiers_data, list):
+        categorized: dict[str, list[dict[str, Any]]] = {"S": [], "A": [], "B": [], "C": [], "D": []}
+        for item in tiers_data:
+            score = item.get("user_score") or item.get("score") or 0
+            if score >= 90:
+                categorized["S"].append(item)
+            elif score >= 80:
+                categorized["A"].append(item)
+            elif score >= 70:
+                categorized["B"].append(item)
+            elif score >= 60:
+                categorized["C"].append(item)
+            else:
+                categorized["D"].append(item)
+        tiers_data = categorized
+
+    tier_colors = {
+        "S": "#ff7f7f",
+        "A": "#ffbf7f",
+        "B": "#ffff7f",
+        "C": "#7fff7f",
+        "D": "#7fbfff",
+    }
+    rows_svg = []
+    y = 60
+    for tier, color in tier_colors.items():
+        items = tiers_data.get(tier, [])
+        titles_str = ", ".join(i.get("title", "") for i in items[:5]) or "No titles"
+        rows_svg.append(f"""
+    <g transform="translate(20, {y})">
+      <rect width="80" height="70" rx="8" fill="{color}"/>
+      <text x="40" y="44" font-family="sans-serif" font-size="28" font-weight="900" fill="#000000" text-anchor="middle">{tier}</text>
+      <rect x="90" width="670" height="70" rx="8" fill="rgba(255,255,255,0.05)" stroke="rgba(255,255,255,0.1)"/>
+      <text x="110" y="40" font-family="sans-serif" font-size="14" fill="#ffffff">{titles_str}</text>
+    </g>""")
+        y += 85
+
+    return f"""<svg xmlns="http://www.w3.org/2000/svg" width="800" height="{y + 20}" viewBox="0 0 800 {y + 20}">
+  <rect width="800" height="{y + 20}" rx="16" fill="#121020"/>
+  <text x="30" y="38" font-family="sans-serif" font-size="22" font-weight="700" fill="#f4b8ff">OTAKU ORBIT TIER LIST</text>
+  {"".join(rows_svg)}
+</svg>"""
+
+
+def prepare_anilist_sync_payload(
+    row: dict[str, Any] | int,
+    status: str = "PLANNING",
+    progress: int = 0,
+    score: int | None = None,
+) -> dict[str, Any]:
+    from modules.config import ANILIST_STATUS_MAP
+
+    rev_status = {v: k for k, v in ANILIST_STATUS_MAP.items()}
+    if isinstance(row, int):
+        media_id = row
+        media_status = status
+        media_progress = progress
+        media_score = score or 0
+    else:
+        media_id = row.get("anime_id") or row.get("id", 0)
+        media_status = row.get("status", "PLANNING")
+        media_progress = row.get("progress", 0)
+        media_score = row.get("user_score", 0) or 0
+
+    anilist_status = rev_status.get(media_status, "CURRENT")
+    mutation = """mutation ($mediaId: Int, $status: MediaListStatus, $progress: Int, $scoreRaw: Int) {
+  SaveMediaListEntry (mediaId: $mediaId, status: $status, progress: $progress, scoreRaw: $scoreRaw) {
+    id
+    status
+    progress
+    score (format: POINT_100)
+  }
+}"""
+    return {
+        "query": mutation,
+        "variables": {
+            "mediaId": media_id,
+            "status": anilist_status,
+            "progress": media_progress,
+            "scoreRaw": media_score,
+        },
+    }
+
+
+def export_kitsu_json(rows: list[dict[str, Any]]) -> str:
+    kitsu_entries = []
+    for r in rows:
+        status_map = {
+            "WATCHING": "current",
+            "COMPLETED": "completed",
+            "PLANNING": "planned",
+            "DROPPED": "dropped",
+            "REWATCHING": "current",
+        }
+        kitsu_entries.append(
+            {
+                "type": "library-entries",
+                "attributes": {
+                    "status": status_map.get(r.get("status"), "planned"),
+                    "progress": r.get("progress", 0),
+                    "ratingTwenty": (r.get("user_score", 0) // 5) if r.get("user_score") else None,
+                    "notes": r.get("notes", ""),
+                    "reconsumeCount": r.get("rewatches", 0),
+                },
+                "media": {
+                    "title": r.get("title", ""),
+                    "id": r.get("anime_id"),
+                },
+            }
+        )
+    return json.dumps({"data": kitsu_entries}, indent=2)
+
+
+def import_kitsu_json(json_str: str) -> list[dict[str, Any]]:
+    payload = json.loads(json_str)
+    entries = payload.get("data", [])
+    result = []
+    rev_status = {
+        "current": "WATCHING",
+        "completed": "COMPLETED",
+        "planned": "PLANNING",
+        "dropped": "DROPPED",
+    }
+    for e in entries:
+        attrs = e.get("attributes", {})
+        media = e.get("media", {})
+        aid = media.get("id") or hash(media.get("title", "kitsu")) % 1_000_000
+        score = (attrs.get("ratingTwenty") or 0) * 5
+        result.append(
+            {
+                "anime_id": int(aid),
+                "title": media.get("title", "Imported Title"),
+                "status": rev_status.get(attrs.get("status"), "PLANNING"),
+                "progress": attrs.get("progress", 0),
+                "user_score": score if score > 0 else None,
+                "notes": attrs.get("notes", ""),
+                "rewatches": attrs.get("reconsumeCount", 0),
+                "updated_at": datetime.now().isoformat(),
+            }
+        )
+    return result
+
+
+def export_simkl_csv(rows: list[dict[str, Any]]) -> str:
+    output = io.StringIO()
+    writer = csv.writer(output)
+    writer.writerow(["simkl_id", "title", "type", "status", "user_rating", "episodes_watched"])
+    for r in rows:
+        writer.writerow(
+            [
+                r.get("anime_id"),
+                csv_safe_cell(r.get("title", "")),
+                r.get("media_type", "anime").lower(),
+                r.get("status", "planning").lower(),
+                r.get("user_score", ""),
+                r.get("progress", 0),
+            ]
+        )
+    return output.getvalue()
+
+
+def import_simkl_csv(csv_str: str) -> list[dict[str, Any]]:
+    reader = csv.DictReader(io.StringIO(csv_str))
+    result = []
+    for row in reader:
+        try:
+            aid = int(row.get("simkl_id") or 0)
+        except ValueError:
+            aid = 0
+        if not aid:
+            continue
+        score_val = None
+        if row.get("user_rating"):
+            try:
+                score_val = int(row["user_rating"])
+            except ValueError:
+                pass
+        result.append(
+            {
+                "anime_id": aid,
+                "title": row.get("title", "SIMKL Anime"),
+                "status": (row.get("status") or "planning").upper(),
+                "progress": int(row.get("episodes_watched") or 0),
+                "user_score": score_val,
+                "updated_at": datetime.now().isoformat(),
+            }
+        )
+    return result
+
+
+def generate_discord_webhook_payload(
+    airing_anime: dict[str, Any] | str,
+    episode: int | str = "?",
+    total_episodes: int | str | None = None,
+    score: int | None = None,
+) -> dict[str, Any]:
+    if isinstance(airing_anime, str):
+        title = airing_anime
+        ep = episode
+        image = ""
+    else:
+        title = airing_anime.get("title", "Anime Broadcast")
+        ep = airing_anime.get("next_airing_episode", episode)
+        image = airing_anime.get("image") or ""
+    return {
+        "content": "📢 **New Episode Airing Alert!**",
+        "embeds": [
+            {
+                "title": f"{title} - Episode {ep}",
+                "description": f"Broadcast starting soon! Track your progress on [Otaku Orbit]({APP_URL})",
+                "color": 16038143,
+                "thumbnail": {"url": image} if image else None,
+                "footer": {"text": f"Otaku Orbit v{APP_VERSION}"},
+            }
+        ],
+    }
+
+
+def generate_service_worker_js() -> str:
+    return f"""// Otaku Orbit Offline Service Worker v{APP_VERSION}
+const CACHE_NAME = 'otaku-orbit-cache-v{APP_VERSION}';
+const ASSETS_TO_CACHE = [
+  '/',
+  '/manifest.json'
+];
+
+self.addEventListener('install', (event) => {{
+  event.waitUntil(
+    caches.open(CACHE_NAME).then((cache) => cache.addAll(ASSETS_TO_CACHE))
+  );
+  self.skipWaiting();
+}});
+
+self.addEventListener('fetch', (event) => {{
+  event.respondWith(
+    caches.match(event.request).then((response) => response || fetch(event.request))
+  );
+}});
+"""

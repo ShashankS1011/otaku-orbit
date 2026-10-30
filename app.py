@@ -104,7 +104,7 @@ from modules import (
     validate_watchlist_state,
 )
 
-APP_VERSION = "1.7.0"
+APP_VERSION = "1.8.0"
 
 __all__ = [
     "ACHIEVEMENTS",

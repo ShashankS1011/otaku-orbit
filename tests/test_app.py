@@ -838,7 +838,7 @@ def test_modular_package_exports():
     assert hasattr(modules, "anilist_query")
     assert hasattr(modules, "calculate_watch_streak")
     assert hasattr(modules, "render_watchlist")
-    assert modules.APP_VERSION == "1.7.0"
+    assert modules.APP_VERSION == "1.8.0"
 
 
 def test_composite_database_indices(isolated_db):
@@ -927,3 +927,309 @@ def test_render_analytics_resilient_to_chart_failure(monkeypatch, isolated_db):
     ]
     # Verify render_analytics executes completely without raising TypeError
     app.render_analytics(rows)
+
+
+def test_v18_config_constants():
+    from modules.config import (
+        ANIME_MOODS,
+        BINGO_CHALLENGES,
+        CUSTOM_SHELVES,
+        FRANCHISE_WATCH_ORDERS,
+        MEDIA_SUBTYPES,
+    )
+
+    assert len(CUSTOM_SHELVES) >= 6
+    assert "Masterpiece" in CUSTOM_SHELVES
+    assert len(MEDIA_SUBTYPES) >= 6
+    assert "TV" in MEDIA_SUBTYPES
+    assert "Cozy & Chill" in ANIME_MOODS
+    assert len(BINGO_CHALLENGES) == 25
+    assert "Fate" in FRANCHISE_WATCH_ORDERS
+
+
+def test_v18_db_shelves_and_notes(isolated_db):
+    from modules.db import (
+        batch_update_shelf,
+        fetch_episode_notes,
+        log_episode_note,
+        save_anime,
+        update_anime_shelf,
+    )
+
+    anime = {
+        "id": 888,
+        "title": {"english": "Test Anime", "romaji": "Test Anime"},
+        "episodes": 12,
+        "genres": ["Action"],
+        "media_type": "ANIME",
+        "format": "TV",
+    }
+    save_anime(anime, status="WATCHING")
+
+    update_anime_shelf(888, "Masterpiece")
+    from modules.db import db_rows
+
+    rows = db_rows()
+    saved = next(r for r in rows if r["anime_id"] == 888)
+    assert saved.get("shelf") == "Masterpiece"
+
+    batch_update_shelf([888], "Favorites")
+    rows = db_rows()
+    saved = next(r for r in rows if r["anime_id"] == 888)
+    assert saved.get("shelf") == "Favorites"
+
+    log_episode_note(888, 1, "Epic intro fight sequence!")
+    notes = fetch_episode_notes(888)
+    assert len(notes) == 1
+    assert notes[0]["episode"] == 1
+    assert "Epic intro" in notes[0]["note"]
+
+
+def test_v18_db_rewatch_cycles_and_goals(isolated_db):
+    from modules.db import (
+        fetch_rewatch_cycles,
+        fetch_viewing_goal,
+        record_rewatch_cycle,
+        set_viewing_goal,
+    )
+
+    cycle_id = record_rewatch_cycle(101, score=95, notes="Masterpiece rewatch")
+    assert cycle_id > 0
+    cycles = fetch_rewatch_cycles(101)
+    assert len(cycles) == 1
+    assert cycles[0]["cycle_number"] == 1
+    assert cycles[0]["score"] == 95
+
+    set_viewing_goal(15, "WEEKLY")
+    goal = fetch_viewing_goal()
+    assert goal is not None
+    assert goal["target_count"] == 15
+    assert goal["period"] == "WEEKLY"
+
+
+def test_v18_db_sqlite_backup_and_restore(isolated_db):
+    from modules.db import (
+        export_sqlite_backup_base64,
+        restore_sqlite_backup_base64,
+        save_anime,
+    )
+
+    anime = {
+        "id": 999,
+        "title": {"english": "Snapshot Anime", "romaji": "Snapshot Anime"},
+        "episodes": 24,
+        "genres": ["Sci-Fi"],
+        "media_type": "ANIME",
+        "format": "TV",
+    }
+    save_anime(anime, status="COMPLETED")
+
+    b64_str = export_sqlite_backup_base64()
+    assert len(b64_str) > 100
+
+    ok = restore_sqlite_backup_base64(b64_str)
+    assert ok is True
+
+    from modules.db import db_rows
+
+    rows = db_rows()
+    assert any(r["anime_id"] == 999 for r in rows)
+
+
+def test_v18_pick_random_backlog():
+    from modules.services import pick_random_backlog
+
+    items = [
+        {"title": "Show A", "status": "PLANNING", "genres": "Action, Sci-Fi", "duration": 24},
+        {"title": "Show B", "status": "COMPLETED", "genres": "Comedy", "duration": 24},
+        {"title": "Show C", "status": "PLANNING", "genres": "Slice of Life, Comedy", "duration": 20},
+    ]
+
+    picked = pick_random_backlog(items, status="PLANNING")
+    assert picked is not None
+    assert picked["title"] in ["Show A", "Show C"]
+
+    picked_mood = pick_random_backlog(items, status="PLANNING", mood="Cozy & Chill")
+    assert picked_mood is not None
+    assert picked_mood["title"] == "Show C"
+
+
+def test_v18_taste_match_and_mood_filters():
+    from modules.services import calculate_taste_match_score, filter_by_mood
+
+    library = [
+        {"genres": "Action, Adventure, Fantasy", "user_score": 90},
+        {"genres": "Action, Sci-Fi", "user_score": 85},
+    ]
+
+    candidate_good = {"genres": ["Action", "Adventure"]}
+    candidate_bad = {"genres": ["Romance", "Music"]}
+
+    score_good = calculate_taste_match_score(candidate_good, library)
+    score_bad = calculate_taste_match_score(candidate_bad, library)
+    assert score_good > score_bad
+
+    catalogue = [
+        {"title": {"romaji": "Chill Camp"}, "genres": ["Slice of Life", "Comedy"]},
+        {"title": {"romaji": "Explosion Attack"}, "genres": ["Action", "Supernatural"]},
+    ]
+    cozy = filter_by_mood(catalogue, "Cozy & Chill")
+    assert len(cozy) == 1
+    assert cozy[0]["title"]["romaji"] == "Chill Camp"
+
+
+def test_v18_franchise_watch_order_and_staff():
+    from modules.services import extract_staff_and_directors, get_franchise_watch_order
+
+    order = get_franchise_watch_order("Fate/stay night: Unlimited Blade Works")
+    assert order is not None
+    assert len(order["release"]) >= 3
+    assert len(order["chronological"]) >= 3
+    assert "tip" in order
+
+    anime_payload = {
+        "staff": {
+            "edges": [
+                {"role": "Director", "node": {"name": {"full": "Tetsuro Araki"}}},
+                {"role": "Series Composition", "node": {"name": {"full": "Yasuko Kobayashi"}}},
+            ]
+        }
+    }
+    staff = extract_staff_and_directors(anime_payload)
+    assert len(staff) == 2
+    assert staff[0]["name"] == "Tetsuro Araki"
+
+
+def test_v18_theme_previews_and_accent_colors():
+    from modules.services import derive_artwork_accent_color, get_theme_video_links
+
+    links = get_theme_video_links("Frieren: Beyond Journey's End")
+    assert "YouTube Search" in links
+    assert "AnimeThemes" in links
+
+    color = derive_artwork_accent_color("https://example.com/cover.jpg")
+    assert color.startswith("#")
+    assert len(color) == 7
+
+
+def test_v18_seiyuu_matrix_and_spoiler_mask():
+    from modules.services import apply_spoiler_mask, build_seiyuu_character_matrix
+
+    library_rows = [
+        {"title": "Anime A", "characters_json": '[{"character": "Char 1", "voice_actor": "Mamoru Miyano"}]'},
+        {"title": "Anime B", "characters_json": '[{"character": "Char 2", "voice_actor": "Mamoru Miyano"}]'},
+    ]
+
+    matrix = build_seiyuu_character_matrix(library_rows)
+    assert "Mamoru Miyano" in matrix
+    assert len(matrix["Mamoru Miyano"]) == 2
+
+    raw_text = "The protagonist dies at the ending and was betrayed."
+    masked = apply_spoiler_mask(raw_text)
+    assert "spoiler" in masked.lower()
+    assert "orbit-spoiler-box" in masked
+    assert "SPOILER BLOCKED" in masked
+
+
+def test_v18_passport_and_tierlist_svg():
+    from modules.services import generate_otaku_passport_svg, generate_tier_list_svg
+
+    rows = [
+        {
+            "title": "Anime A",
+            "status": "COMPLETED",
+            "progress": 12,
+            "episodes": 12,
+            "genres": "Action",
+            "user_score": 95,
+        },
+        {
+            "title": "Anime B",
+            "status": "COMPLETED",
+            "progress": 24,
+            "episodes": 24,
+            "genres": "Action",
+            "user_score": 85,
+        },
+    ]
+
+    passport_svg = generate_otaku_passport_svg("TestUser", rows)
+    assert "<svg" in passport_svg
+    assert "TestUser" in passport_svg
+    assert "OTAKU ORBIT PASSPORT" in passport_svg
+
+    tier_svg = generate_tier_list_svg(rows)
+    assert "<svg" in tier_svg
+    assert "TIER LIST" in tier_svg
+
+
+def test_v18_bingo_and_user_taste_compatibility():
+    from modules.services import calculate_user_taste_compatibility, evaluate_bingo_card
+
+    rows = [
+        {"title": "Anime A", "status": "COMPLETED", "genres": "Action", "episodes": 12},
+    ]
+    history = [{"watched_at": "2026-10-01"}]
+
+    bingo = evaluate_bingo_card(rows, history)
+    assert len(bingo) == 25
+    assert any(b["completed"] for b in bingo)
+
+    friend_rows = [
+        {"title": "Anime A", "genres": "Action, Adventure"},
+        {"title": "Anime Friend Only", "genres": "Action, Sci-Fi"},
+    ]
+    compat = calculate_user_taste_compatibility(rows, friend_rows)
+    assert "compatibility_pct" in compat
+    assert compat["compatibility_pct"] > 0
+    assert "recommendations" in compat
+
+
+def test_v18_kitsu_and_simkl_export_import(isolated_db):
+    from modules.services import (
+        export_kitsu_json,
+        export_simkl_csv,
+        import_kitsu_json,
+        import_simkl_csv,
+    )
+
+    rows = [
+        {
+            "anime_id": 1234,
+            "title": "Steins;Gate",
+            "status": "COMPLETED",
+            "progress": 24,
+            "episodes": 24,
+            "user_score": 95,
+        }
+    ]
+
+    kitsu_str = export_kitsu_json(rows)
+    assert "Steins;Gate" in kitsu_str
+    count_kitsu = len(import_kitsu_json(kitsu_str))
+    assert count_kitsu >= 1
+
+    simkl_csv = export_simkl_csv(rows)
+    assert "Steins;Gate" in simkl_csv
+    count_simkl = len(import_simkl_csv(simkl_csv))
+    assert count_simkl >= 1
+
+
+def test_v18_discord_webhook_and_service_worker():
+    from modules.services import (
+        generate_discord_webhook_payload,
+        generate_service_worker_js,
+        prepare_anilist_sync_payload,
+    )
+
+    payload = generate_discord_webhook_payload("Frieren", 28, 28, 100)
+    assert "embeds" in payload
+    assert "Frieren" in payload["embeds"][0]["title"]
+
+    sw_js = generate_service_worker_js()
+    assert "otaku-orbit-cache" in sw_js
+    assert "addEventListener" in sw_js
+
+    sync_payload = prepare_anilist_sync_payload(123, "COMPLETED", 24, 90)
+    assert "SaveMediaListEntry" in sync_payload["query"]
+    assert sync_payload["variables"]["mediaId"] == 123
