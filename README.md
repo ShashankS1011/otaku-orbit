@@ -1,96 +1,213 @@
 # Otaku Orbit
 
-> Your personal anime command centre — discover, track, and plan your next obsession.
+> **Your personal anime command centre — discover, track, and curate your next obsession.**
 
-**Otaku Orbit** is a fast, polished anime companion built with Python and Streamlit. It brings AniList discovery, seasonal browsing, personalized recommendations, watchlist progress, and useful viewing statistics into one calm, focused dashboard.
+Otaku Orbit is an anime intelligence and library companion engineered with Python and Streamlit. Powered by the AniList GraphQL API, it unifies catalogue exploration, seasonal browsing, high-resolution media art, weekly airing schedules, personal watchlists, and viewing analytics into a responsive dashboard.
 
-**Made by Shashank — powered by Saiyan spirit**
+**Crafted by Shashank — powered by Saiyan spirit.**
 
 [Open Otaku Orbit](https://otaku-orbit.streamlit.app/)
 
 Current version: `1.5.0`
 
-## Deploy on Streamlit Community Cloud
+---
 
-Streamlit Community Cloud deployment settings:
+## Executive Overview
 
-- **Repository:** `ShashankS1011/otaku-orbit`
-- **Branch:** `main`
-- **Main file path:** `app.py`
-- **App URL:** otaku-orbit.streamlit.app
+Otaku Orbit delivers a frictionless anime tracking experience with zero forced sign-ups, zero third-party tracking, and enterprise-grade privacy boundaries. Whether running as a lightweight personal desktop app or deployed to Streamlit Community Cloud with OIDC multi-user authentication, Otaku Orbit gives you full ownership of your data, library, and viewing history.
 
-Streamlit will build the app from this repository and provide a public `streamlit.app` URL. Future pushes to `main` will automatically update the deployed app.
+### Core Highlights
 
-## What it does
+- **Dynamic Visual Experience**: Choose between an immersive **Poster Grid** layout for visual browsing and a **Detailed Cards** layout for in-depth summaries.
+- **High-DPI Artwork**: Native retrieval of AniList `extraLarge` cover art and high-definition banner images with responsive scaling.
+- **Broadcast Intelligence**: Real-time weekly **Airing Calendar** grouped by day, converted dynamically to your local timezone, with live badges for titles in your watchlist.
+- **Franchise & Recommendation Graphs**: Explore franchise trees (prequels, sequels, side-stories) and AniList community recommendations directly from media modals.
+- **Comprehensive Library Management**: Dedicated tracking statuses (`PLANNING`, `WATCHING`, `REWATCHING`, `COMPLETED`, `PAUSED`, `DROPPED`), rewatch counters, custom tags, and a batch operations toolbar for bulk editing.
+- **Viewing Analytics & Watch Time**: Instant calculations of remaining backlog watch time, total hours viewed, personal 1–10 scoring distributions, and genre profile affinities.
+- **Robust Data Portability**: Two-way JSON backups with atomic schema validation, spreadsheet-compatible CSV export with formula injection sanitization, and MyAnimeList (MAL) XML format support.
+- **Personalized Theming**: Four dynamic UI themes — *Saiyan Neon*, *Cyberpunk Cyan*, *Sunset Flame*, and *Emerald Matrix*.
+- **Privacy & Security First**: Session-scoped guest data, optional per-user OIDC SQLite isolation, automated database migrations, and one-click data deletion.
 
-- Search AniList's anime catalogue with fast cached GraphQL requests
-- Browse paginated search results, open full anime details, and use random discovery
-- View high-resolution cover images, banner art, and trailer links
-- Switch between visual Poster Grid and Detailed Card view modes
-- Track upcoming broadcasts with the weekly Airing Calendar in your local timezone
-- Navigate franchise relations (prequels, sequels) and community recommendations
-- Filter results by genre, format, score, and mature-content preference
-- Get personalized recommendations weighted by ratings and completion status
-- Choose from sleek theme presets: Saiyan Neon, Cyberpunk Cyan, Sunset Flame, and Emerald Matrix
-- Save anime locally or isolate by signed-in OIDC account
-- Track planning, watching, rewatching, completed, and dropped titles with rewatch counts
-- Organize your collection with custom tags and perform batch operations
-- Export and restore your watchlist as portable JSON, spreadsheet CSV, or MyAnimeList (MAL) XML
-- Set a daily episode goal and see upcoming airing reminders
-- Delete user watchlist data and notes securely from privacy controls
-- Explore a personal genre profile with lightweight charts
-- Stay resilient with cached requests, exponential backoff retries, and clear API error states
+---
 
-## Run locally
+## Architectural Stack
+
+| Layer | Technologies & Specifications |
+| :--- | :--- |
+| **Frontend Framework** | Streamlit (Python 3.11, 3.12, 3.13) with custom high-contrast CSS design system |
+| **Upstream Data API** | AniList GraphQL API v2 with client-side TTL caching, rate-limit backoff, and retry jitter |
+| **Persistence Engine** | SQLite 3 with parameterized queries, index optimization, and automatic schema migrations |
+| **Security & Hardening** | Bandit static analysis, `pip-audit` CVE vulnerability scanning, formula injection escaping |
+| **Linting & Formatting** | Ruff (fast static analysis, PEP 8 compliance, import sorting) |
+| **Quality & Testing** | `pytest` unit test suite (67 tests), Streamlit `AppTest`, Playwright mobile browser smoke tests |
+| **CI / CD Pipelines** | GitHub Actions matrix test suite, CodeQL security analysis, release integrity verification |
+
+---
+
+## Feature Deep Dive
+
+### 1. Discovery & Seasonal Exploration
+- **Intelligent Search**: Real-time debounced querying across the entire AniList catalogue with cached GraphQL requests.
+- **Seasonal Lineup**: Interactive season selector (Winter, Spring, Summer, Fall) with year navigation dating back to classic eras.
+- **Filter Matrix**: Granular filtering by format (TV, Movie, OVA, ONA, Special), genre, minimum community score, and mature content preference.
+- **Random Discovery**: One-click serendipitous exploration discovering hidden gems across genres.
+- **Safe Browsing**: Server-side filtering ensuring safe and clean metadata retrieval.
+
+### 2. Media Modals & Franchise Navigation
+- **High-Definition Media Details**: Rich modal overlays featuring high-resolution banner artwork, studio credits, broadcast status, and synopsis.
+- **Integrated Trailers**: Embedded official YouTube trailers for instant previews.
+- **Franchise Tree**: Navigate directly between prequels, sequels, and spin-offs without leaving the modal.
+- **Community Recommendations**: View crowdsourced "Fans Also Liked" suggestions complete with user recommendation counts and quick-add shortcuts.
+
+### 3. Airing Calendar & Timezone Handling
+- **Weekly Schedule**: Aggregates upcoming episode broadcasts across seven days with countdown timers.
+- **Local Timezone Conversion**: Automatically adapts UTC broadcast schedules into any configured local timezone (e.g., UTC, America/New_York, Europe/London, Asia/Tokyo).
+- **Watchlist Badges**: Highlights upcoming episodes for anime currently tracked in your personal library.
+
+### 4. Watchlist & Backlog Operations
+- **Lifecycle Statuses**: Track titles across Planning, Watching, Rewatching, Completed, Paused, and Dropped states.
+- **Quick Episode Increment (+1)**: Single-click progress updates that automatically transition titles to `COMPLETED` when the final episode is watched.
+- **Rewatch Counter**: Dedicated counter tracking full rewatch cycles for evergreen favorites.
+- **Custom Tagging**: Assign custom tags (e.g., `comfort`, `seasonal-2026`, `to-binge`) and filter your library by tag.
+- **Batch Action Toolbar**: Select multiple anime simultaneously to update statuses, apply bulk tags, or batch remove titles.
+- **Personal Notes & 1–10 Scoring**: Record personal reflections, reviews, and ratings for every tracked title.
+
+### 5. Time & Analytics Engine
+- **Backlog Watch-Time Calculator**: Calculates total runtime remaining across your "Watching" and "Planning" queues.
+- **Viewing History Statistics**: Computes total hours viewed and completed anime counts.
+- **Genre Affinity Radar**: Generates a visual breakdown of your top genres to guide future recommendations.
+- **Daily Goal Tracker**: Set a daily target for episodes and track completion throughout the day.
+
+### 6. Data Portability & Privacy
+- **MyAnimeList (MAL) XML Export**: Seamlessly migrate your watch history and scores to MyAnimeList or third-party ecosystem tools.
+- **Spreadsheet CSV Export**: Export your complete library to CSV, hardened against spreadsheet formula injection (`=`, `@`, `+`, `-`).
+- **Atomic JSON Backups**: Full snapshot export and import with backward-compatible schema validation.
+- **User Privacy & Account Isolation**: When OIDC authentication is configured, user libraries are stored in isolated per-account databases. Unauthenticated guest sessions remain transient in memory/session.
+
+---
+
+## Configuration & Environment Variables
+
+Otaku Orbit can be configured via environment variables or Streamlit secrets (`.streamlit/secrets.toml`):
+
+| Variable | Type | Default | Description |
+| :--- | :--- | :--- | :--- |
+| `ANILIST_API_URL` | String | `https://graphql.anilist.co` | Upstream AniList GraphQL endpoint |
+| `OTAKU_ORBIT_DB_PATH` | Path | `otaku_orbit.db` | Target path for SQLite database file |
+| `OTAKU_ORBIT_CACHE_TTL` | Integer | `900` | In-memory cache duration in seconds (15 minutes) |
+| `OTAKU_ORBIT_REQUEST_TIMEOUT` | Float | `10.0` | HTTP request timeout in seconds |
+| `OTAKU_ORBIT_REQUEST_ATTEMPTS` | Integer | `3` | Maximum HTTP retry attempts with exponential backoff |
+
+For multi-user deployments with OpenID Connect (OIDC), reference the template in `.streamlit/secrets.toml.example`.
+
+---
+
+## Local Development & Setup
+
+### Prerequisites
+- Python 3.11, 3.12, or 3.13
+- Git
+
+### Installation
+
+1. **Clone the repository:**
+   ```powershell
+   git clone https://github.com/ShashankS1011/otaku-orbit.git
+   cd "otaku-orbit"
+   ```
+
+2. **Create and activate a virtual environment:**
+   ```powershell
+   # Windows PowerShell:
+   py -3.11 -m venv .venv
+   .venv\Scripts\Activate.ps1
+
+   # Linux / macOS:
+   python3 -m venv .venv
+   source .venv/bin/activate
+   ```
+
+3. **Install development dependencies:**
+   ```powershell
+   python -m pip install --upgrade pip
+   python -m pip install -r requirements-dev.txt
+   ```
+
+4. **Run the application:**
+   ```powershell
+   streamlit run app.py
+   ```
+   The local application will launch at `http://localhost:8501`.
+
+---
+
+## Quality Assurance & Automated Testing
+
+Otaku Orbit maintains a test suite covering database operations, API resilience, schema migrations, and frontend rendering:
 
 ```powershell
-py -m venv .venv
-.venv\Scripts\Activate.ps1
-python -m pip install -r requirements-dev.txt
-streamlit run app.py
-```
+# Run the unit and integration test suite:
+python -m pytest -q tests/test_app.py
 
-The app opens at `localhost:8501`.
-
-The app uses a separate SQLite database file per signed-in OIDC account. Without OIDC configuration, guest watchlists are scoped to one browser session and do not sync across devices. To enable accounts, configure an OIDC provider in Streamlit Community Cloud secrets using `.streamlit/secrets.toml.example` as a template. Register the app's `oauth2callback` redirect URI with the provider. Never commit real credentials.
-
-Streamlit Community Cloud storage may be ephemeral. Set `OTAKU_ORBIT_DB_PATH` to a file location on a persistent mounted volume when your host provides one. The API endpoint, request timeout, retry count, and cache duration can be adjusted with `ANILIST_API_URL`, `OTAKU_ORBIT_REQUEST_TIMEOUT`, `OTAKU_ORBIT_REQUEST_ATTEMPTS`, and `OTAKU_ORBIT_CACHE_TTL`.
-
-## Test and quality checks
-
-```powershell
-python -m pytest -q
+# Verify Python syntax compilation:
 python -m py_compile app.py
+
+# Run static linting and import checks:
 python -m ruff check app.py tests
+
+# Verify code formatting:
+python -m ruff format --check app.py tests
+
+# Run mobile browser smoke tests (requires Playwright Chromium):
+python -m playwright install --with-deps chromium
+python -m pytest -q tests/test_mobile_browser.py
 ```
 
-GitHub Actions runs tests, syntax checks, and Ruff on Python 3.11 and 3.12 for every push and pull request (`.github/workflows/ci.yml`).
+### Continuous Integration (CI/CD)
 
-## Release checklist
+The GitHub Actions workflow suite runs on all pushes and pull requests:
+- **`ci.yml`**: Executes the test suite, Ruff linting, and formatting checks across Python 3.11, 3.12, and 3.13, alongside mobile browser emulation.
+- **`security.yml`**: Runs `pip-audit` dependency vulnerability scanning and Bandit static analysis.
+- **`release-check.yml`**: Enforces strict semantic version consistency across `app.py`, `README.md`, and `CHANGELOG.md`.
+- **`codeql.yml`**: GitHub Advanced Security static code analysis for Python.
 
-1. Update `APP_VERSION` in `app.py` using semantic versioning and add a changelog entry.
-2. Run the test, compile, and Ruff commands above.
-3. Update the current version in this README.
-4. Push a release branch and merge it through a passing pull request.
+---
 
-## Contributors
+## Streamlit Community Cloud Deployment
 
-- butteryjam — reported the mobile browser compatibility issue.
+To deploy Otaku Orbit to Streamlit Community Cloud:
 
-## Versioning
+1. Connect your GitHub repository to Streamlit Community Cloud.
+2. Configure the deployment settings:
+   - **Repository:** `ShashankS1011/otaku-orbit`
+   - **Branch:** `main`
+   - **Main file path:** `app.py`
+   - **Custom subdomain:** `otaku-orbit` (resulting in `otaku-orbit.streamlit.app`)
+3. If enabling OIDC authentication, populate your client ID and secret in the Streamlit Cloud **Secrets** management panel using `.streamlit/secrets.toml.example` as a reference.
 
-Otaku Orbit follows semantic versioning in `MAJOR.MINOR.PATCH` form:
+---
 
-- **Major:** breaking changes
-- **Minor:** new backward-compatible features
-- **Patch:** bug fixes and small maintenance updates
+## Release Process & Versioning
 
-The application version is defined in `app.py` and updated with each release.
+Otaku Orbit strictly follows semantic versioning (`MAJOR.MINOR.PATCH`):
+- **Major**: Breaking architectural changes or backwards-incompatible database schemas.
+- **Minor**: Significant new features, layout enhancements, and export formats.
+- **Patch**: Bug fixes, performance optimizations, and dependency maintenance.
+
+### Release Checklist
+1. Increment `APP_VERSION` in `app.py`.
+2. Add a comprehensive release entry to `CHANGELOG.md` under the matching version heading.
+3. Synchronize `Current version: \`X.Y.Z\`` in `README.md`.
+4. Validate that all local tests and lint checks pass.
+5. Create a release pull request; merging to `main` triggers automated version verification.
+
+---
+
+## Contributors & Credits
+
+- **Shashank** — Project Creator and Maintainer
+- **butteryjam** — Discovered and reported the mobile browser JavaScript compatibility regression
 
 ## License
 
-Otaku Orbit is released under the MIT License.
-
-## Technology
-
-Python · Streamlit · AniList GraphQL · SQLite · pytest · GitHub Actions
+Otaku Orbit is open-source software licensed under the MIT License.
