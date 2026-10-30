@@ -687,9 +687,9 @@ def test_filter_anime_by_source_and_studio():
 
 def test_generate_music_links():
     links = app.generate_music_links("Chainsaw Man")
-    assert "spotify.com" in links["Spotify OP"]
-    assert "spotify.com" in links["Spotify ED"]
-    assert "music.youtube.com" in links["YouTube Music"]
+    assert links["Spotify OP"].startswith("https://open.spotify.com/")
+    assert links["Spotify ED"].startswith("https://open.spotify.com/")
+    assert links["YouTube Music"].startswith("https://music.youtube.com/")
 
 
 def test_watch_history_and_streak(isolated_db):
