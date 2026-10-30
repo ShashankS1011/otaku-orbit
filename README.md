@@ -6,20 +6,18 @@
 
 **Made by Shashank — powered by Saiyan spirit**
 
-[Open the live Streamlit app](https://otaku-orbit.streamlit.app/)
+[Open Otaku Orbit](https://otaku-orbit.streamlit.app/)
 
 Current version: `1.3.0`
 
 ## Deploy on Streamlit Community Cloud
 
-[Deploy Otaku Orbit on Streamlit Community Cloud](https://share.streamlit.io/)
-
-After signing in with GitHub, create a new app with these settings:
+Streamlit Community Cloud deployment settings:
 
 - **Repository:** `ShashankS1011/otaku-orbit`
 - **Branch:** `main`
 - **Main file path:** `app.py`
-- **App URL:** https://otaku-orbit.streamlit.app/
+- **App URL:** otaku-orbit.streamlit.app
 
 Streamlit will build the app from this repository and provide a public `streamlit.app` URL. Future pushes to `main` will automatically update the deployed app.
 
@@ -49,7 +47,7 @@ python -m pip install -r requirements-dev.txt
 streamlit run app.py
 ```
 
-The app opens at `http://localhost:8501`. Your watchlist is stored in `anime_companion.db` and is intentionally ignored by Git.
+The app opens at `localhost:8501`. Your watchlist is stored in `anime_companion.db` and is intentionally ignored by Git.
 
 For deployment, local SQLite storage is best for personal use and can be reset by an ephemeral hosting environment. Set `OTAKU_ORBIT_DB_PATH` to a persistent mounted path when your host provides one. The API endpoint, request timeout, retry count, and cache duration can be adjusted with `ANILIST_API_URL`, `OTAKU_ORBIT_REQUEST_TIMEOUT`, `OTAKU_ORBIT_REQUEST_ATTEMPTS`, and `OTAKU_ORBIT_CACHE_TTL`.
 
@@ -61,7 +59,7 @@ python -m py_compile app.py
 python -m ruff check app.py tests
 ```
 
-GitHub Actions runs tests, syntax checks, and Ruff for every push and pull request. The workflow is in [`.github/workflows/ci.yml`](.github/workflows/ci.yml).
+GitHub Actions runs tests, syntax checks, and Ruff for every push and pull request (`.github/workflows/ci.yml`).
 
 ## Release checklist
 
@@ -72,11 +70,7 @@ GitHub Actions runs tests, syntax checks, and Ruff for every push and pull reque
 
 ## Contributors
 
-- [butteryjam](https://github.com/butteryjam) — reported the mobile browser compatibility issue.
-
-## Community support
-
-[Open the Otaku Orbit support thread on Discord](https://discord.com/channels/@me/1252520070043668561/1562171196617785464)
+- butteryjam — reported the mobile browser compatibility issue.
 
 ## Versioning
 
@@ -90,7 +84,7 @@ The application version is defined in `app.py` and updated with each published p
 
 ## License
 
-Otaku Orbit is released under the [MIT License](./LICENSE).
+Otaku Orbit is released under the MIT License.
 
 ## Technology
 
