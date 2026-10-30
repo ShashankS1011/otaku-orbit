@@ -414,6 +414,21 @@ def render_tier_list_maker(rows: list[dict[str, Any]]) -> None:
             st.caption("No titles placed in this tier.")
 
 
+def safe_bar_chart(data: dict[str, Any]) -> None:
+    """Render st.bar_chart with a native Streamlit fallback if Altair/Vega fails."""
+    try:
+        st.bar_chart(data)
+    except Exception:
+        max_val = max((float(v) for v in data.values() if isinstance(v, (int, float))), default=1.0)
+        max_val = max(max_val, 1.0)
+        for label, val in data.items():
+            val_num = float(val) if isinstance(val, (int, float)) else 0.0
+            ratio = min(1.0, max(0.0, val_num / max_val))
+            c_label, c_bar = st.columns([1, 3])
+            c_label.write(f"**{label}** ({val})")
+            c_bar.progress(ratio)
+
+
 def render_analytics(rows: list[dict[str, Any]], owner_id: str | None = None) -> None:
     st.title("Analytics & Insights")
     st.caption("Deep dive into your viewing journey, habits, achievements, and pacing.")
@@ -467,7 +482,7 @@ def render_analytics(rows: list[dict[str, Any]], owner_id: str | None = None) ->
                 b_key = f"{(s // 10) * 10}-{(s // 10 + 1) * 10}"
                 if b_key in score_bins:
                     score_bins[b_key] += 1
-        st.bar_chart(score_bins)
+        safe_bar_chart(score_bins)
         st.caption(f"Mean personal score: **{avg_user_score}/100** across {len(rated_rows)} rated titles.")
         st.divider()
 
@@ -477,7 +492,7 @@ def render_analytics(rows: list[dict[str, Any]], owner_id: str | None = None) ->
             genre_counts[genre] = genre_counts.get(genre, 0) + 1
     if genre_counts:
         st.subheader("Genre Profile")
-        st.bar_chart(dict(sorted(genre_counts.items(), key=lambda item: item[1], reverse=True)[:10]))
+        safe_bar_chart(dict(sorted(genre_counts.items(), key=lambda item: item[1], reverse=True)[:10]))
         st.divider()
 
     st.subheader("Viewing Activity Log (Recent 30 Days)")
@@ -489,7 +504,7 @@ def render_analytics(rows: list[dict[str, Any]], owner_id: str | None = None) ->
                 day_counts[day] = day_counts.get(day, 0) + 1
         recent_30_days = [(date.today() - timedelta(days=i)).isoformat() for i in range(29, -1, -1)]
         heatmap_data = {d: day_counts.get(d, 0) for d in recent_30_days}
-        st.bar_chart(heatmap_data)
+        safe_bar_chart(heatmap_data)
     else:
         st.info("Watch history will record daily as you log progress with +1 Ep.")
     st.divider()
@@ -764,7 +779,7 @@ def render_stats(rows: list[dict[str, Any]]) -> None:
             genre_counts[genre] = genre_counts.get(genre, 0) + 1
     if genre_counts:
         st.subheader("Your genre profile")
-        st.bar_chart(dict(sorted(genre_counts.items(), key=lambda item: item[1], reverse=True)[:10]))
+        safe_bar_chart(dict(sorted(genre_counts.items(), key=lambda item: item[1], reverse=True)[:10]))
 
 
 def render_recommendations(rows: list[dict[str, Any]], saved_ids: set[int], owner_id: str | None = None) -> None:

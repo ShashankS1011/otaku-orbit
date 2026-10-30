@@ -108,6 +108,7 @@ from modules.ui import (
     render_stats,
     render_tier_list_maker,
     render_watchlist,
+    safe_bar_chart,
     show_anime_details,
 )
 
@@ -206,5 +207,6 @@ __all__ = [
     "render_stats",
     "render_tier_list_maker",
     "render_watchlist",
+    "safe_bar_chart",
     "show_anime_details",
 ]

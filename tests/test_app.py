@@ -890,3 +890,40 @@ def test_manifest_and_meta_tags_have_no_indented_code_blocks():
     for line in source.splitlines():
         if any(tag in line for tag in ("<link rel=", "<meta name=")):
             assert not line.startswith("    "), f"Tag has 4 leading spaces (renders as code block in Markdown): {line}"
+
+
+def test_safe_bar_chart_success(monkeypatch):
+    called = []
+    monkeypatch.setattr(app.st, "bar_chart", lambda data: called.append(data))
+    app.safe_bar_chart({"Action": 10, "Adventure": 5})
+    assert len(called) == 1
+    assert called[0] == {"Action": 10, "Adventure": 5}
+
+
+def test_safe_bar_chart_fallback_on_altair_exception(monkeypatch):
+    def failing_bar_chart(data):
+        raise TypeError("TypedDict() got an unexpected keyword argument 'closed'")
+
+    monkeypatch.setattr(app.st, "bar_chart", failing_bar_chart)
+    # Must not raise an exception; gracefully renders native fallback
+    app.safe_bar_chart({"Action": 10, "Adventure": 5})
+
+
+def test_render_analytics_resilient_to_chart_failure(monkeypatch, isolated_db):
+    def failing_bar_chart(data):
+        raise TypeError("TypedDict() got an unexpected keyword argument 'closed'")
+
+    monkeypatch.setattr(app.st, "bar_chart", failing_bar_chart)
+    rows = [
+        {
+            "anime_id": 1,
+            "title": "Frieren",
+            "genres": "Adventure, Fantasy",
+            "user_score": 95,
+            "progress": 28,
+            "episodes": 28,
+            "status": "COMPLETED",
+        }
+    ]
+    # Verify render_analytics executes completely without raising TypeError
+    app.render_analytics(rows)
