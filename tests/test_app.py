@@ -5,6 +5,7 @@ from urllib.parse import urlparse
 
 import pytest
 import requests
+from streamlit.testing.v1 import AppTest
 
 import app
 
@@ -32,7 +33,7 @@ def test_external_links_are_https_urls():
 
 def test_streamlit_version_is_pinned_for_older_mobile_browsers():
     requirements = Path(__file__).parents[1].joinpath("requirements.txt").read_text()
-    assert "streamlit>=1.49,<1.50" in requirements
+    assert "streamlit[auth]>=1.49,<1.50" in requirements
 
 
 def test_mobile_css_breakpoint_is_present_in_app_source():
@@ -48,6 +49,54 @@ def isolated_db(tmp_path, monkeypatch):
     return database
 
 
+def test_database_path_isolated_per_owner(tmp_path, monkeypatch):
+    monkeypatch.setattr(app, "DB_PATH", tmp_path / "watchlist.db")
+    alice_path = app.database_path_for_owner("alice")
+    bob_path = app.database_path_for_owner("bob")
+    assert alice_path != bob_path
+    assert "alice" not in alice_path.name
+
+
+def test_guest_identity_is_stable_for_one_session_and_rotates_between_sessions(monkeypatch):
+    monkeypatch.setattr(app, "authentication_configured", lambda: False)
+    app.st.session_state.clear()
+    first_session = app.current_owner_id()
+    assert app.current_owner_id() == first_session
+    app.st.session_state.clear()
+    assert app.current_owner_id() != first_session
+
+
+def test_watchlists_are_isolated_between_owners(tmp_path, monkeypatch):
+    monkeypatch.setattr(app, "DB_PATH", tmp_path / "watchlist.db")
+    app.init_db("alice")
+    app.init_db("bob")
+    app.save_anime({"id": 1, "title": {"english": "Private title"}}, owner_id="alice")
+    assert [row["title"] for row in app.db_rows("alice")] == ["Private title"]
+    assert app.db_rows("bob") == []
+
+
+def test_watchlist_empty_state_renders_in_streamlit_app_test(isolated_db):
+    def render_empty_view():
+        import app
+
+        app.render_watchlist()
+
+    app_test = AppTest.from_function(render_empty_view).run()
+    assert any("watchlist is empty" in item.value.lower() for item in app_test.info)
+
+
+def test_owner_data_deletion_removes_only_that_owner(tmp_path, monkeypatch):
+    monkeypatch.setattr(app, "DB_PATH", tmp_path / "watchlist.db")
+    app.init_db("alice")
+    app.init_db("bob")
+    app.save_anime({"id": 1, "title": {"english": "Alice"}}, owner_id="alice")
+    app.save_anime({"id": 2, "title": {"english": "Bob"}}, owner_id="bob")
+    app.delete_owner_data("alice")
+    app.init_db("alice")
+    assert app.db_rows("alice") == []
+    assert [row["title"] for row in app.db_rows("bob")] == ["Bob"]
+
+
 def test_display_title_prefers_english_then_romaji():
     assert app.display_title({"title": {"english": "English", "romaji": "Romaji"}}) == "English"
     assert app.display_title({"title": {"romaji": "Romaji"}}) == "Romaji"
@@ -57,6 +106,52 @@ def test_display_title_prefers_english_then_romaji():
 def test_clean_description_normalizes_markup_and_whitespace():
     assert app.clean_description(" A<br>  story\nabout heroes. ") == "A story about heroes."
     assert app.clean_description(None) == "No synopsis available."
+    assert app.clean_description("<p>Safe</p><script>alert('x')</script><b>text</b>") == "Safe text"
+
+
+def test_cover_image_prefers_largest_anilist_image():
+    assert (
+        app.cover_image_url({"coverImage": {"extraLarge": "https://s4.anilist.co/large.jpg", "large": "fallback"}})
+        == "https://s4.anilist.co/large.jpg"
+    )
+    assert (
+        app.cover_image_url({"coverImage": {"large": "https://s4.anilist.co/large.jpg"}})
+        == "https://s4.anilist.co/large.jpg"
+    )
+    assert app.cover_image_url({}) is None
+
+
+def test_anilist_queries_request_extra_large_covers():
+    assert "coverImage { extraLarge large }" in app.SEARCH_QUERY
+    assert "coverImage { extraLarge large }" in app.DETAIL_QUERY
+    assert "coverImage { extraLarge large }" in app.TRENDING_QUERY
+
+
+def test_cover_urls_are_limited_to_secure_anilist_hosts():
+    assert app.is_safe_cover_url("https://s4.anilist.co/file.jpg")
+    assert not app.is_safe_cover_url("http://s4.anilist.co/file.jpg")
+    assert not app.is_safe_cover_url("https://example.com/file.jpg")
+
+
+def test_csv_export_neutralizes_spreadsheet_formulas():
+    assert app.csv_safe_cell("=cmd|A0") == "'=cmd|A0"
+    assert app.csv_safe_cell("  @SUM(A1:A2)") == "'  @SUM(A1:A2)"
+    assert app.csv_safe_cell("Safe title") == "Safe title"
+
+
+def test_csv_export_escapes_user_supplied_formula_fields():
+    data = app.export_watchlist_csv([{"anime_id": 1, "title": '=HYPERLINK("https://bad")', "notes": "@SUM(A1:A2)"}])
+    assert "'=HYPERLINK" in data
+    assert "'@SUM" in data
+
+
+def test_validate_watchlist_state_rejects_invalid_progress_and_score():
+    with pytest.raises(ValueError, match="Episode progress"):
+        app.validate_watchlist_state(13, "WATCHING", 12)
+    with pytest.raises(ValueError, match="valid watch status"):
+        app.validate_watchlist_state(1, "UNKNOWN", 12)
+    with pytest.raises(ValueError, match="between 0 and 100"):
+        app.validate_watchlist_state(1, "WATCHING", 12, 101)
 
 
 @pytest.mark.parametrize(
@@ -120,7 +215,11 @@ def test_anilist_query_surfaces_graphql_errors(monkeypatch):
         def json(self):
             return {"errors": [{"message": "bad query"}]}
 
-    monkeypatch.setattr(app.requests, "post", lambda *args, **kwargs: Response())
+    class Session:
+        def post(self, *args, **kwargs):
+            return Response()
+
+    monkeypatch.setattr(app, "_request_session", Session)
     with pytest.raises(RuntimeError, match="bad query"):
         app.anilist_query("query { nope }")
 
@@ -137,13 +236,31 @@ def test_filter_anime_respects_genre_score_and_adult_flag():
 
 
 def test_watchlist_backup_can_be_restored(isolated_db):
-    original = [{"anime_id": 7, "title": "Backup Anime", "status": "WATCHING", "progress": 4,
-                 "episodes": 12, "duration": 24, "genres": "Action", "updated_at": "2026-01-01T00:00:00"}]
+    original = [
+        {
+            "anime_id": 7,
+            "title": "Backup Anime",
+            "status": "WATCHING",
+            "progress": 4,
+            "episodes": 12,
+            "duration": 24,
+            "genres": "Action",
+            "updated_at": "2026-01-01T00:00:00",
+        }
+    ]
     restored = app.import_watchlist(app.export_watchlist(original))
     assert restored == 1
     assert app.db_rows()[0]["title"] == "Backup Anime"
     assert app.db_rows()[0]["progress"] == 4
     assert app.db_rows()[0]["duration"] == 24
+
+
+def test_watchlist_backup_has_version_and_accepts_legacy_list(isolated_db):
+    current = json.loads(app.export_watchlist([]))
+    assert current == {"format_version": app.BACKUP_FORMAT_VERSION, "items": []}
+    assert app.import_watchlist('[{"anime_id": 88, "title": "Legacy"}]') == 1
+    with pytest.raises(ValueError, match="Unsupported watchlist backup version"):
+        app.import_watchlist('{"format_version": 99, "items": []}')
 
 
 def test_anilist_query_retries_transient_request_error(monkeypatch):
@@ -162,16 +279,23 @@ def test_anilist_query_retries_transient_request_error(monkeypatch):
             raise requests.RequestException("temporary failure")
         return Response()
 
-    monkeypatch.setattr(app.requests, "post", flaky_post)
+    class Session:
+        def post(self, *args, **kwargs):
+            return flaky_post(*args, **kwargs)
+
+    monkeypatch.setattr(app, "_request_session", Session)
     monkeypatch.setattr(app.time, "sleep", lambda _: None)
+    monkeypatch.setattr(app.random, "uniform", lambda low, high: 0)
     assert app.anilist_query("retry-test-query") == [{"id": 1}]
     assert len(calls) == 2
 
 
 def test_fetch_anime_page_preserves_pagination_metadata(monkeypatch):
-    monkeypatch.setattr(app, "anilist_response", lambda *args, **kwargs: {
-        "Page": {"media": [{"id": 1}], "pageInfo": {"hasNextPage": True}}
-    })
+    monkeypatch.setattr(
+        app,
+        "anilist_response",
+        lambda *args, **kwargs: {"Page": {"media": [{"id": 1}], "pageInfo": {"hasNextPage": True}}},
+    )
     results, has_next = app.fetch_anime_page("frieren", page=2)
     assert results == [{"id": 1}]
     assert has_next is True
@@ -189,6 +313,14 @@ def test_load_with_fallback_returns_previous_session_result(monkeypatch):
     result, from_cache = app.load_with_fallback("trending", unavailable)
     assert result == ["cached later"]
     assert from_cache is True
+    assert app.cache_age_label("trending") != "an unknown time"
+
+
+def test_backup_import_rolls_back_if_a_later_row_is_invalid(isolated_db):
+    payload = '[{"anime_id": 1, "title": "Valid"}, {"anime_id": 0, "title": "Invalid"}]'
+    with pytest.raises(ValueError, match="invalid id"):
+        app.import_watchlist(payload)
+    assert app.db_rows() == []
 
 
 def test_import_watchlist_rejects_invalid_backup_entry(isolated_db):
@@ -238,7 +370,11 @@ def test_anilist_query_raises_on_http_error_without_retrying(monkeypatch):
         calls.append(1)
         return Response()
 
-    monkeypatch.setattr(app.requests, "post", post)
+    class Session:
+        def post(self, *args, **kwargs):
+            return post(*args, **kwargs)
+
+    monkeypatch.setattr(app, "_request_session", Session)
     with pytest.raises(requests.HTTPError, match="bad request"):
         app.anilist_query("bad-request")
     assert len(calls) == 1
@@ -276,11 +412,18 @@ def test_fetch_anime_page_passes_is_adult_variable(monkeypatch):
 
 def test_current_season_and_year_mapping():
     from datetime import date
+
     assert app.current_season_and_year(date(2026, 1, 15)) == ("WINTER", 2026)
     assert app.current_season_and_year(date(2026, 4, 1)) == ("SPRING", 2026)
     assert app.current_season_and_year(date(2026, 7, 20)) == ("SUMMER", 2026)
     assert app.current_season_and_year(date(2026, 10, 5)) == ("FALL", 2026)
-    assert app.current_season_and_year(date(2026, 12, 31)) == ("WINTER", 2026)
+    assert app.current_season_and_year(date(2026, 12, 31)) == ("WINTER", 2027)
+
+
+def test_airing_formatter_respects_explicit_timezone():
+    airing = {"nextAiringEpisode": {"airingAt": 1, "episode": 1}}
+    assert app.format_airing(airing, "UTC") == "Episode 1 · 01 Jan, 00:00"
+    assert app.format_airing(airing, "Asia/Kolkata") == "Episode 1 · 01 Jan, 05:30"
 
 
 def test_format_trailer_url_youtube():
@@ -288,6 +431,20 @@ def test_format_trailer_url_youtube():
     assert app.format_trailer_url({"site": "dailymotion", "id": "123"}) is None
     assert app.format_trailer_url(None) is None
     assert app.format_trailer_url({}) is None
+
+
+def test_recommendations_weight_completed_and_high_rated_genres():
+    rows = [
+        {"genres": "Action, Drama", "status": "COMPLETED", "user_score": 100},
+        {"genres": "Comedy", "status": "DROPPED", "user_score": 20},
+    ]
+    candidates = [
+        {"id": 1, "genres": ["Action"], "averageScore": 70},
+        {"id": 2, "genres": ["Comedy"], "averageScore": 95},
+        {"id": 3, "genres": ["Drama"], "averageScore": 75},
+    ]
+    ranked = app.rank_recommendations(rows, candidates, {3}, limit=2)
+    assert [anime["id"] for anime in ranked] == [1, 2]
 
 
 def test_update_progress_sets_user_score(isolated_db):
@@ -317,20 +474,139 @@ def test_increment_watchlist_progress_and_auto_completion(isolated_db):
 
 
 def test_export_watchlist_csv():
-    rows = [{
-        "anime_id": 101,
-        "title": "Steins;Gate",
-        "status": "COMPLETED",
-        "progress": 24,
-        "episodes": 24,
-        "duration": 24,
-        "score": 91,
-        "user_score": 99,
-        "genres": "Sci-Fi, Thriller",
-        "notes": "El Psy Kongroo",
-        "updated_at": "2026-10-27T12:00:00",
-    }]
+    rows = [
+        {
+            "anime_id": 101,
+            "title": "Steins;Gate",
+            "status": "COMPLETED",
+            "progress": 24,
+            "episodes": 24,
+            "duration": 24,
+            "score": 91,
+            "user_score": 99,
+            "genres": "Sci-Fi, Thriller",
+            "notes": "El Psy Kongroo",
+            "updated_at": "2026-10-27T12:00:00",
+        }
+    ]
     csv_text = app.export_watchlist_csv(rows)
     assert "Anime ID,Title,Status" in csv_text
     assert "101,Steins;Gate,COMPLETED,24,24,24,91,99" in csv_text
     assert "El Psy Kongroo" in csv_text
+
+
+def test_rewatching_status_supported(isolated_db):
+    assert "REWATCHING" in app.WATCH_STATUSES
+    app.save_anime({"id": 201, "title": {"english": "Attack on Titan"}, "episodes": 25}, status="REWATCHING")
+    rows = app.db_rows()
+    assert rows[0]["status"] == "REWATCHING"
+
+
+def test_rewatches_and_tags_saved_and_updated(isolated_db):
+    app.save_anime(
+        {"id": 202, "title": {"english": "Death Note"}, "episodes": 37},
+        rewatches=1,
+        tags="Mystery, Classic",
+    )
+    rows = app.db_rows()
+    assert rows[0]["rewatches"] == 1
+    assert "Classic" in rows[0]["tags"]
+
+    app.update_progress(202, progress=15, status="WATCHING", rewatches=2, tags="Masterpiece, Mystery")
+    updated = app.db_rows()
+    assert updated[0]["rewatches"] == 2
+    assert "Masterpiece" in updated[0]["tags"]
+
+
+def test_negative_rewatches_raises_value_error():
+    with pytest.raises(ValueError, match="Rewatch count cannot be negative"):
+        app.validate_watchlist_state(0, "PLANNING", 12, rewatches=-1)
+
+
+def test_batch_operations(isolated_db):
+    app.save_anime({"id": 301, "title": {"english": "Show 1"}}, status="PLANNING")
+    app.save_anime({"id": 302, "title": {"english": "Show 2"}}, status="PLANNING")
+
+    app.batch_update_status([301, 302], "WATCHING")
+    rows = {r["anime_id"]: r["status"] for r in app.db_rows()}
+    assert rows[301] == "WATCHING"
+    assert rows[302] == "WATCHING"
+
+    app.batch_add_tag([301, 302], "Binge")
+    rows_tags = {r["anime_id"]: r["tags"] for r in app.db_rows()}
+    assert "Binge" in rows_tags[301]
+    assert "Binge" in rows_tags[302]
+
+    app.batch_remove_anime([301])
+    remaining_ids = [r["anime_id"] for r in app.db_rows()]
+    assert 301 not in remaining_ids
+    assert 302 in remaining_ids
+
+
+def test_export_watchlist_mal_xml():
+    rows = [
+        {
+            "anime_id": 501,
+            "title": "Fullmetal Alchemist: Brotherhood",
+            "status": "COMPLETED",
+            "progress": 64,
+            "user_score": 98,
+            "rewatches": 3,
+            "notes": "Absolute masterpiece",
+        }
+    ]
+    xml = app.export_watchlist_mal_xml(rows)
+    assert "<myanimelist>" in xml
+    assert "<series_animedb_id>501</series_animedb_id>" in xml
+    assert "<series_title>Fullmetal Alchemist: Brotherhood</series_title>" in xml
+    assert "<my_status>Completed</my_status>" in xml
+    assert "<my_score>10</my_score>" in xml
+    assert "<my_times_watched>3</my_times_watched>"
+    assert "<my_comments>Absolute masterpiece</my_comments>" in xml
+
+
+def test_banner_image_url_extraction():
+    assert (
+        app.banner_image_url({"bannerImage": "https://s4.anilist.co/banner.jpg"}) == "https://s4.anilist.co/banner.jpg"
+    )
+    assert app.banner_image_url({"bannerImage": "http://unsafe.com/banner.jpg"}) is None
+    assert app.banner_image_url({}) is None
+
+
+def test_fetch_airing_schedule(monkeypatch):
+    recorded = {}
+
+    def fake_response(query, variables):
+        recorded.update(variables)
+        return {"Page": {"airingSchedules": [{"id": 1, "episode": 5}]}}
+
+    monkeypatch.setattr(app, "anilist_response", fake_response)
+    results = app.fetch_airing_schedule(1000, 2000)
+    assert recorded["airingAt_greater"] == 1000
+    assert recorded["airingAt_lesser"] == 2000
+    assert len(results) == 1
+    assert results[0]["episode"] == 5
+
+
+def test_theme_palettes_structure():
+    assert "Saiyan Neon" in app.THEME_PALETTES
+    assert "Cyberpunk Cyan" in app.THEME_PALETTES
+    for palette in app.THEME_PALETTES.values():
+        assert "primary" in palette
+        assert "glow" in palette
+        assert "sidebar" in palette
+
+
+def test_backup_validation_supports_rewatches_and_tags():
+    raw_row = {
+        "anime_id": 999,
+        "title": "Evangelion",
+        "progress": 26,
+        "rewatches": 4,
+        "tags": "Mecha, Psychological",
+        "banner_image": "https://s4.anilist.co/eva.jpg",
+    }
+    validated = app.validate_backup_row(raw_row, 1)
+    assert validated["rewatches"] == 4
+    assert validated["tags"] == "Mecha, Psychological"
+    assert validated["banner_image"] == "https://s4.anilist.co/eva.jpg"
