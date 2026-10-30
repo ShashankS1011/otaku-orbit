@@ -23,4 +23,4 @@ jobs:
       - name: Audit dependencies for vulnerabilities
         run: python -m pip_audit -r requirements.txt || true
       - name: Run Bandit security scanner
-        run: python -m bandit -r app.py -ll -ii -s B608
+        run: python -m bandit -r app.py modules -ll -ii -s B608

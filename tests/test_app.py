@@ -824,3 +824,119 @@ def test_pwa_manifest_file_exists():
     data = json.loads(manifest_file.read_text(encoding="utf-8"))
     assert data["display"] == "standalone"
     assert data["short_name"] == "Otaku Orbit"
+
+
+def test_modular_package_exports():
+    import modules
+    import modules.api
+    import modules.config
+    import modules.db
+    import modules.services
+    import modules.ui
+
+    assert hasattr(modules, "init_db")
+    assert hasattr(modules, "anilist_query")
+    assert hasattr(modules, "calculate_watch_streak")
+    assert hasattr(modules, "render_watchlist")
+    assert modules.APP_VERSION == "1.7.0"
+
+
+def test_composite_database_indices(isolated_db):
+    with sqlite3.connect(isolated_db) as conn:
+        indices = {row[1] for row in conn.execute("SELECT * FROM sqlite_master WHERE type='index'")}
+        assert "idx_watchlist_media_status" in indices
+        assert "idx_watch_history_anime" in indices
+
+
+def test_glassmorphic_styling_in_app_source():
+    source = Path(app.__file__).read_text(encoding="utf-8")
+    assert "backdrop-filter: blur" in source
+    assert "border-radius: 18px" in source
+    assert "@media (max-width: 768px)" in source
+
+
+def test_request_session_user_agent_header():
+    session = app._request_session()
+    user_agent = session.headers.get("User-Agent", "")
+    assert user_agent == f"OtakuOrbit/{app.APP_VERSION}"
+
+
+def test_format_timestamp_edge_cases():
+    ts = 1700000000
+    formatted_default = app._format_timestamp(ts)
+    assert len(formatted_default) > 0
+    formatted_utc = app._format_timestamp(ts, "UTC")
+    assert len(formatted_utc) > 0
+
+
+def test_release_version_consistency_across_files():
+    import re
+
+    root = Path(__file__).parents[1]
+    app_ver = app.APP_VERSION
+    readme = (root / "README.md").read_text(encoding="utf-8")
+    changelog = (root / "CHANGELOG.md").read_text(encoding="utf-8")
+
+    readme_match = re.search(r"Current version: `([^`]+)`", readme)
+    assert readme_match is not None, "README.md missing current version badge"
+    assert readme_match.group(1) == app_ver, (
+        f"Version mismatch: app.py ({app_ver}) vs README.md ({readme_match.group(1)})"
+    )
+    assert f"## {app_ver}" in changelog, f"CHANGELOG.md missing release section for {app_ver}"
+
+
+def test_modular_package_exports():
+    import modules
+    import modules.api
+    import modules.config
+    import modules.db
+    import modules.services
+    import modules.ui
+
+    assert hasattr(modules, "init_db")
+    assert hasattr(modules, "anilist_query")
+    assert hasattr(modules, "calculate_watch_streak")
+    assert hasattr(modules, "render_watchlist")
+    assert modules.APP_VERSION == "1.7.0"
+
+
+def test_composite_database_indices(isolated_db):
+    with sqlite3.connect(isolated_db) as conn:
+        indices = {row[1] for row in conn.execute("SELECT * FROM sqlite_master WHERE type='index'")}
+        assert "idx_watchlist_media_status" in indices
+        assert "idx_watch_history_anime" in indices
+
+
+def test_glassmorphic_styling_in_app_source():
+    source = Path(app.__file__).read_text(encoding="utf-8")
+    assert "backdrop-filter: blur" in source
+    assert "border-radius: 18px" in source
+    assert "@media (max-width: 768px)" in source
+
+
+def test_request_session_user_agent_header():
+    session = app._request_session()
+    user_agent = session.headers.get("User-Agent", "")
+    assert user_agent == f"OtakuOrbit/{app.APP_VERSION}"
+
+
+def test_format_timestamp_edge_cases():
+    ts = 1700000000
+    formatted_default = app._format_timestamp(ts)
+    assert len(formatted_default) > 0
+    formatted_utc = app._format_timestamp(ts, "UTC")
+    assert len(formatted_utc) > 0
+
+
+def test_release_version_consistency_across_files():
+    import re
+
+    root = Path(__file__).parents[1]
+    app_ver = app.APP_VERSION
+    readme = (root / "README.md").read_text(encoding="utf-8")
+    changelog = (root / "CHANGELOG.md").read_text(encoding="utf-8")
+
+    readme_match = re.search(r"Current version: `([^`]+)`", readme)
+    assert readme_match is not None, "README.md missing current version badge"
+    assert readme_match.group(1) == app_ver, f"Version mismatch: app.py ({app_ver}) vs README.md ({readme_match.group(1)})"
+    assert f"## {app_ver}" in changelog, f"CHANGELOG.md missing release section for {app_ver}"

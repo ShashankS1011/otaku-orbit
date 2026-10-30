@@ -8,7 +8,7 @@ Otaku Orbit is an anime intelligence and library companion engineered with Pytho
 
 [Open Otaku Orbit](https://otaku-orbit.streamlit.app/)
 
-Current version: `1.6.0`
+Current version: `1.7.0`
 
 ---
 
@@ -18,6 +18,8 @@ Otaku Orbit delivers a frictionless anime tracking experience with zero forced s
 
 ### Core Highlights
 
+- **Modular Clean Architecture**: Refactored domain architecture cleanly decoupled across configuration (`modules.config`), database persistence (`modules.db`), AniList GraphQL integration (`modules.api`), domain business services (`modules.services`), and responsive presentation (`modules.ui`).
+- **Glassmorphic Visual Design**: High-contrast modern glassmorphic interface with dynamic backdrop-blur filters, theme glow accents, card hover elevation transforms, and responsive mobile-first breakpoints.
 - **Dynamic Visual Experience**: Choose between an immersive **Poster Grid** layout for visual browsing and a **Detailed Cards** layout for in-depth summaries.
 - **High-DPI Artwork & Cast Gallery**: Native retrieval of AniList `extraLarge` cover art, high-definition banner images, and a visual **Character & Voice Actor (Seiyuu)** gallery with portraits and roles.
 - **Where to Stream Legally**: Direct official streaming badges and deeplinks for **Crunchyroll**, **Netflix**, **Hulu**, **HIDIVE**, **Disney+**, **Amazon Prime Video**, and **Bilibili**.
@@ -42,12 +44,13 @@ Otaku Orbit delivers a frictionless anime tracking experience with zero forced s
 
 | Layer | Technologies & Specifications |
 | :--- | :--- |
-| **Frontend Framework** | Streamlit (Python 3.11, 3.12, 3.13) with custom high-contrast CSS design system |
+| **Frontend Framework** | Streamlit (Python 3.11, 3.12, 3.13) with glassmorphism CSS design system & backdrop filters |
+| **Modular Architecture** | Clean domain modules (`modules.config`, `modules.db`, `modules.api`, `modules.services`, `modules.ui`) |
 | **Upstream Data API** | AniList GraphQL API v2 with client-side TTL caching, rate-limit backoff, and retry jitter |
-| **Persistence Engine** | SQLite 3 with parameterized queries, index optimization, and automatic schema migrations |
+| **Persistence Engine** | SQLite 3 with composite indexes (`idx_watchlist_media_status`, `idx_watch_history_anime`) & WAL mode |
 | **Security & Hardening** | Bandit static analysis, `pip-audit` CVE vulnerability scanning, formula injection escaping |
 | **Linting & Formatting** | Ruff (fast static analysis, PEP 8 compliance, import sorting) |
-| **Quality & Testing** | `pytest` unit test suite (79 tests), Streamlit `AppTest`, Playwright mobile browser smoke tests |
+| **Quality & Testing** | `pytest` test suite (84 tests), Streamlit `AppTest`, Playwright mobile browser smoke tests |
 | **CI / CD Pipelines** | GitHub Actions matrix test suite, CodeQL security analysis, release integrity verification |
 
 ---
@@ -158,20 +161,20 @@ For multi-user deployments with OpenID Connect (OIDC), reference the template in
 
 ## Quality Assurance & Automated Testing
 
-Otaku Orbit maintains a test suite covering database operations, API resilience, schema migrations, and frontend rendering:
+Otaku Orbit maintains a comprehensive test suite covering database operations, API resilience, schema migrations, and frontend rendering:
 
 ```powershell
-# Run the unit and integration test suite (79 tests):
+# Run the unit and integration test suite (84 tests):
 python -m pytest -q tests/test_app.py
 
 # Verify Python syntax compilation:
-python -m py_compile app.py
+python -m py_compile app.py modules/config.py modules/db.py modules/api.py modules/services.py modules/ui.py modules/__init__.py
 
 # Run static linting and import checks:
-python -m ruff check app.py tests
+python -m ruff check app.py modules tests
 
 # Verify code formatting:
-python -m ruff format --check app.py tests
+python -m ruff format --check app.py modules tests
 
 # Run mobile browser smoke tests (requires Playwright Chromium):
 python -m playwright install --with-deps chromium
