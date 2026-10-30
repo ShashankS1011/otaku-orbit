@@ -22,6 +22,7 @@ from modules.api import (
     load_with_fallback,
 )
 from modules.config import (
+    ANIME_MOODS,
     WATCH_STATUSES,
     offline_mode_enabled,
 )
@@ -31,16 +32,22 @@ from modules.db import (
     batch_update_status,
     db_rows,
     delete_owner_data,
+    export_sqlite_backup_base64,
+    fetch_viewing_goal,
     fetch_watch_history,
     import_watchlist,
     increment_watchlist_progress,
     remove_anime,
+    restore_sqlite_backup_base64,
     save_anime,
+    set_viewing_goal,
     update_progress,
 )
 from modules.services import (
     banner_image_url,
+    build_seiyuu_character_matrix,
     calculate_runtime_display,
+    calculate_user_taste_compatibility,
     calculate_watch_streak,
     calculate_watch_velocity,
     clean_description,
@@ -48,17 +55,26 @@ from modules.services import (
     display_title,
     estimate_completion_date,
     evaluate_achievements,
+    evaluate_bingo_card,
+    export_kitsu_json,
+    export_simkl_csv,
     export_watchlist,
     export_watchlist_csv,
     export_watchlist_mal_xml,
     extract_characters_and_seiyuu,
+    extract_staff_and_directors,
     extract_streaming_links,
     filter_anime,
+    filter_by_mood,
     format_airing,
     format_row_airing,
     format_trailer_url,
     generate_airing_ics,
     generate_music_links,
+    generate_otaku_passport_svg,
+    get_franchise_watch_order,
+    get_theme_video_links,
+    pick_random_backlog,
     rank_recommendations,
 )
 
@@ -70,11 +86,16 @@ def render_filters(results: list[dict[str, Any]], key_prefix: str) -> list[dict[
     studios = sorted(
         {s["name"] for anime in results for s in anime.get("studios", {}).get("nodes", []) if s.get("name")}
     )
-    with st.expander("Filter results", expanded=False):
+    with st.expander("Filter results & Moods", expanded=False):
         c1, c2, c3 = st.columns(3)
         genre = c1.selectbox("Genre", ["All genres", *genres], key=f"genre-{key_prefix}")
         format_name = c2.selectbox("Format", ["All formats", *formats], key=f"format-{key_prefix}")
         source_val = c3.selectbox("Source Material", ["All sources", *sources], key=f"source-{key_prefix}")
+
+        m_col1, m_col2 = st.columns(2)
+        mood_val = m_col1.selectbox("Mood & Vibe", ["All moods", *ANIME_MOODS.keys()], key=f"mood-{key_prefix}")
+        if mood_val != "All moods":
+            results = filter_by_mood(results, mood_val)
 
         c4, c5, c6 = st.columns(3)
         studio_val = c4.selectbox("Studio", ["All studios", *studios], key=f"studio-{key_prefix}")
@@ -153,12 +174,36 @@ def show_anime_details(anime_id: int) -> None:
             col.link_button(f"▶ {s_link['site']}", s_link["url"], use_container_width=True)
 
     music_links = generate_music_links(title)
+    video_links = get_theme_video_links(title)
     st.divider()
-    st.subheader("OST & Theme Songs")
+    st.subheader("OST & Theme Song Previews")
     m_col1, m_col2, m_col3 = st.columns(3)
     m_col1.link_button("🎵 Opening on Spotify", music_links["Spotify OP"], use_container_width=True)
     m_col2.link_button("🎵 Ending on Spotify", music_links["Spotify ED"], use_container_width=True)
     m_col3.link_button("▶️ YouTube Music OST", music_links["YouTube Music"], use_container_width=True)
+
+    v_col1, v_col2 = st.columns(2)
+    v_col1.link_button("📺 Watch OP on YouTube", video_links["YouTube Search"], use_container_width=True)
+    v_col2.link_button("🎬 AnimeThemes Video Previews", video_links["AnimeThemes"], use_container_width=True)
+
+    staff_members = extract_staff_and_directors(anime)
+    if staff_members:
+        st.divider()
+        st.subheader("🎬 Key Production Staff & Directors")
+        st.write(", ".join(f"**{m['name']}** ({m['role']})" for m in staff_members[:6]))
+
+    franchise_info = get_franchise_watch_order(title)
+    if franchise_info:
+        st.divider()
+        st.subheader("🗺️ Franchise Chronological Watch Order Guide")
+        st.caption(f"💡 **Tip:** {franchise_info['tip']}")
+        t_rel, t_chr = st.tabs(["Release Order", "Chronological Story Order"])
+        with t_rel:
+            for idx, entry in enumerate(franchise_info["release"], 1):
+                st.write(f"**{idx}.** {entry}")
+        with t_chr:
+            for idx, entry in enumerate(franchise_info["chronological"], 1):
+                st.write(f"**{idx}.** {entry}")
 
     relations = [
         edge for edge in anime.get("relations", {}).get("edges", []) if edge.get("node") and edge.get("relationType")
@@ -526,6 +571,43 @@ def render_analytics(rows: list[dict[str, Any]], owner_id: str | None = None) ->
                         st.caption(badge_status)
     st.divider()
 
+    with st.expander("🎯 Anime Bingo Challenge Matrix (5x5)", expanded=False):
+        st.caption("Complete rows, columns, or diagonals across these 25 challenges:")
+        bingo_items = evaluate_bingo_card(rows, history)
+        for r_idx in range(5):
+            b_cols = st.columns(5)
+            for c_idx in range(5):
+                item = bingo_items[r_idx * 5 + c_idx]
+                badge = "✅" if item["completed"] else "⬜"
+                b_cols[c_idx].markdown(f"**{badge}** {item['text']}")
+
+    with st.expander("⏱️ Weekly Viewing Habit Goal", expanded=False):
+        goal_data = fetch_viewing_goal(owner_id)
+        current_target = goal_data["target_count"] if goal_data else 10
+        g_col1, g_col2 = st.columns([2, 1])
+        new_target = g_col1.number_input(
+            "Target episodes per week", min_value=1, max_value=100, value=current_target, key="habit_goal_target"
+        )
+        if g_col2.button("Save Habit Target", use_container_width=True):
+            set_viewing_goal(new_target, "WEEKLY", owner_id)
+            st.success("Target updated!")
+        this_week_logged = sum(
+            1 for h in history if (datetime.now() - datetime.fromisoformat(h.get("watched_at", "2000-01-01"))).days <= 7
+        )
+        ratio = min(1.0, this_week_logged / max(1, current_target))
+        st.write(f"**Weekly Progress:** {this_week_logged} / {current_target} episodes ({int(ratio * 100)}%)")
+        st.progress(ratio)
+
+    with st.expander("🎙️ Seiyuu Character Relationship Matrix", expanded=False):
+        matrix = build_seiyuu_character_matrix(rows)
+        multi_voice = {k: v for k, v in matrix.items() if len(v) >= 2}
+        if multi_voice:
+            for actor, roles in list(multi_voice.items())[:8]:
+                roles_fmt = " · ".join(f"**{r['character']}** (*{r['anime']}*)" for r in roles)
+                st.write(f"🎙️ **{actor}**: {roles_fmt}")
+        else:
+            st.info("Log more titles with Japanese voice actors to view your personal cast cross-over matrix.")
+
     render_tier_list_maker(rows)
 
 
@@ -723,8 +805,16 @@ def render_watchlist(owner_id: str | None = None) -> None:
         st.divider()
     if not visible_rows:
         st.info("No saved titles match those filters.")
-    with st.expander("Backup your watchlist"):
-        st.caption("Export a portable backup or restore one on another device.")
+    with st.expander("Backup your watchlist & Export Passport"):
+        st.caption("Export a portable backup, generate your Otaku ID Passport, or export to Kitsu / SIMKL.")
+        passport_svg = generate_otaku_passport_svg("Otaku Explorer", rows)
+        st.download_button(
+            "🪪 Download Otaku ID Passport (.svg)",
+            passport_svg,
+            file_name="otaku_orbit_passport.svg",
+            mime="image/svg+xml",
+            use_container_width=True,
+        )
         d_col1, d_col2, d_col3 = st.columns(3)
         d_col1.download_button(
             "Download JSON",
@@ -745,6 +835,21 @@ def render_watchlist(owner_id: str | None = None) -> None:
             export_watchlist_mal_xml(rows),
             "otaku-orbit-mal.xml",
             "application/xml",
+            use_container_width=True,
+        )
+        c_kitsu, c_simkl = st.columns(2)
+        c_kitsu.download_button(
+            "Export Kitsu JSON",
+            export_kitsu_json(rows),
+            file_name="otaku_orbit_kitsu.json",
+            mime="application/json",
+            use_container_width=True,
+        )
+        c_simkl.download_button(
+            "Export SIMKL CSV",
+            export_simkl_csv(rows),
+            file_name="otaku_orbit_simkl.csv",
+            mime="text/csv",
             use_container_width=True,
         )
 
@@ -784,6 +889,22 @@ def render_stats(rows: list[dict[str, Any]]) -> None:
 
 def render_recommendations(rows: list[dict[str, Any]], saved_ids: set[int], owner_id: str | None = None) -> None:
     st.title("Picked for you")
+    with st.expander("🎡 Anime Wheel of Fortune (Backlog Decision Maker)", expanded=False):
+        st.caption("Can't decide what to watch next from your backlog? Let fate choose!")
+        w1, w2 = st.columns(2)
+        w_mood = w1.selectbox("Filter by Mood", ["Any Mood", *ANIME_MOODS.keys()], key="wheel_mood_select")
+        w_dur = w2.number_input(
+            "Max Episode Duration (mins)", min_value=1, max_value=180, value=30, key="wheel_dur_input"
+        )
+        if st.button("🎰 Spin the Wheel!", type="primary", use_container_width=True):
+            picked = pick_random_backlog(rows, mood=w_mood if w_mood != "Any Mood" else None, max_duration=w_dur)
+            if picked:
+                st.session_state["wheel_picked_title"] = picked
+        if st.session_state.get("wheel_picked_title"):
+            p = st.session_state["wheel_picked_title"]
+            st.success(
+                f"🎯 **Your Next Destiny:** **{p.get('title')}** (Status: {p.get('status')} | {p.get('genres', '')})"
+            )
     if not rows:
         st.info("Save a few anime first and your recommendations will learn your taste.")
         return
@@ -821,6 +942,53 @@ def render_settings(owner_id: str | None = None) -> None:
                     st.rerun()
                 except Exception as error:
                     st.error(f"Synchronization failed: {error}")
+
+    with st.expander("👥 Two-User Taste Compatibility Matcher"):
+        st.caption("Compare your anime library against a friend's library backup JSON to see your match score:")
+        friend_file = st.file_uploader("Upload Friend's Library JSON", type=["json"], key="friend_lib_upload")
+        if friend_file:
+            try:
+                friend_data = json.loads(friend_file.read().decode("utf-8"))
+                f_items = friend_data.get("items", friend_data)
+                rows_current = db_rows(owner_id)
+                compat = calculate_user_taste_compatibility(rows_current, f_items)
+                st.success(f"💖 **Taste Compatibility: {compat['compatibility_pct']}%**")
+                st.caption(compat["summary"])
+                if compat["recommendations"]:
+                    st.write(
+                        "**Top picks from your friend's library for you:** " + ", ".join(compat["recommendations"])
+                    )
+            except Exception as error:
+                st.error(f"Could not compare libraries: {error}")
+
+    with st.expander("☁️ Cloud SQLite Database Snapshot (Zero Data Loss)"):
+        st.caption("Export or restore the entire raw SQLite database as an encoded base64 string:")
+        b64_db = export_sqlite_backup_base64(owner_id)
+        st.download_button(
+            "Download Raw Database Snapshot (.db.b64)",
+            b64_db,
+            file_name="otaku_orbit_snapshot.db.b64",
+            mime="text/plain",
+        )
+        restore_str = st.text_area(
+            "Paste Base64 Database Snapshot to Restore", placeholder="Paste base64 string here..."
+        )
+        if st.button("Restore Database Snapshot") and restore_str.strip():
+            ok = restore_sqlite_backup_base64(restore_str.strip(), owner_id)
+            if ok:
+                st.success("Database restored successfully!")
+                st.rerun()
+            else:
+                st.error("Invalid database snapshot string.")
+
+    with st.expander("⌨️ Keyboard Navigation Shortcuts"):
+        st.markdown("""
+        - `/` : Focus title search bar
+        - `Esc` : Close detail modal
+        - `+` / `-` : Quick increment / decrement progress
+        - `w` : Switch between Anime and Manga modes
+        - `?` : Open shortcuts cheatsheet
+        """)
 
     with st.expander("Progressive Web App (PWA) & Offline Setup"):
         st.caption("Install Otaku Orbit directly to your phone or desktop home screen:")

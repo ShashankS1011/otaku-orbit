@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import hashlib
 import json
 import sqlite3
@@ -102,6 +103,8 @@ def init_db(owner_id: str | None = None) -> None:
             ("media_type", "TEXT DEFAULT 'ANIME'"),
             ("chapters", "INTEGER"),
             ("volumes", "INTEGER"),
+            ("shelf", "TEXT DEFAULT ''"),
+            ("media_subtype", "TEXT DEFAULT 'ANIME'"),
         ]:
             if col_name not in columns:
                 connection.execute(f"ALTER TABLE watchlist ADD COLUMN {col_name} {col_type}")  # nosec B608
@@ -120,6 +123,33 @@ def init_db(owner_id: str | None = None) -> None:
         connection.execute(
             "CREATE INDEX IF NOT EXISTS idx_watch_history_anime ON watch_history(anime_id, watched_at DESC)"
         )
+        connection.execute("CREATE INDEX IF NOT EXISTS idx_watchlist_shelf ON watchlist(shelf)")
+
+        connection.execute("""CREATE TABLE IF NOT EXISTS episode_notes (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            anime_id INTEGER NOT NULL,
+            episode INTEGER NOT NULL,
+            note TEXT NOT NULL,
+            watched_at TEXT NOT NULL
+        )""")
+        connection.execute("CREATE INDEX IF NOT EXISTS idx_ep_notes_anime ON episode_notes(anime_id, episode)")
+
+        connection.execute("""CREATE TABLE IF NOT EXISTS rewatch_cycles (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            anime_id INTEGER NOT NULL,
+            cycle_number INTEGER NOT NULL,
+            completed_at TEXT NOT NULL,
+            score INTEGER,
+            notes TEXT DEFAULT ''
+        )""")
+        connection.execute("CREATE INDEX IF NOT EXISTS idx_rewatch_cycles_anime ON rewatch_cycles(anime_id)")
+
+        connection.execute("""CREATE TABLE IF NOT EXISTS viewing_goals (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            target_count INTEGER NOT NULL,
+            period TEXT NOT NULL DEFAULT 'WEEKLY',
+            updated_at TEXT NOT NULL
+        )""")
 
 
 def db_rows(owner_id: str | None = None) -> list[dict[str, Any]]:
@@ -503,3 +533,117 @@ def import_watchlist(payload: str, owner_id: str | None = None) -> int:
             )
             restored += 1
     return restored
+
+
+def log_episode_note(anime_id: int, episode: int, note: str, owner_id: str | None = None) -> None:
+    now = datetime.now().isoformat()
+    with sqlite3.connect(database_path_for_owner(owner_id), timeout=15) as conn:
+        conn.execute(
+            "INSERT INTO episode_notes (anime_id, episode, note, watched_at) VALUES (?, ?, ?, ?)",
+            (anime_id, episode, note.strip(), now),
+        )
+
+
+def fetch_episode_notes(anime_id: int, owner_id: str | None = None) -> list[dict[str, Any]]:
+    with sqlite3.connect(database_path_for_owner(owner_id), timeout=15) as conn:
+        conn.row_factory = sqlite3.Row
+        rows = conn.execute(
+            "SELECT * FROM episode_notes WHERE anime_id = ? ORDER BY episode ASC, watched_at DESC",
+            (anime_id,),
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+
+def update_anime_shelf(anime_id: int, shelf: str, owner_id: str | None = None) -> None:
+    now = datetime.now().isoformat()
+    with sqlite3.connect(database_path_for_owner(owner_id), timeout=15) as conn:
+        conn.execute(
+            "UPDATE watchlist SET shelf = ?, updated_at = ? WHERE anime_id = ?",
+            (shelf.strip(), now, anime_id),
+        )
+
+
+def batch_update_shelf(anime_ids: list[int], shelf: str, owner_id: str | None = None) -> None:
+    if not anime_ids:
+        return
+    now = datetime.now().isoformat()
+    placeholders = ",".join("?" * len(anime_ids))
+    with sqlite3.connect(database_path_for_owner(owner_id), timeout=15) as conn:
+        conn.execute(
+            f"UPDATE watchlist SET shelf = ?, updated_at = ? WHERE anime_id IN ({placeholders})",  # nosec B608
+            [shelf.strip(), now, *anime_ids],
+        )
+
+
+def record_rewatch_cycle(
+    anime_id: int,
+    score: int | None = None,
+    notes: str = "",
+    owner_id: str | None = None,
+    *args: Any,
+    **kwargs: Any,
+) -> int:
+    now = datetime.now().isoformat()
+    with sqlite3.connect(database_path_for_owner(owner_id), timeout=15) as conn:
+        existing = conn.execute("SELECT COUNT(*) FROM rewatch_cycles WHERE anime_id = ?", (anime_id,)).fetchone()[0]
+        cycle_num = existing + 1
+        cur = conn.execute(
+            "INSERT INTO rewatch_cycles (anime_id, cycle_number, completed_at, score, notes) VALUES (?, ?, ?, ?, ?)",
+            (anime_id, cycle_num, now, score if isinstance(score, int) else None, str(notes).strip()),
+        )
+        conn.execute(
+            "UPDATE watchlist SET rewatches = rewatches + 1, updated_at = ? WHERE anime_id = ?",
+            (now, anime_id),
+        )
+        return int(cur.lastrowid or cycle_num)
+
+
+def fetch_rewatch_cycles(anime_id: int, owner_id: str | None = None) -> list[dict[str, Any]]:
+    with sqlite3.connect(database_path_for_owner(owner_id), timeout=15) as conn:
+        conn.row_factory = sqlite3.Row
+        rows = conn.execute(
+            "SELECT * FROM rewatch_cycles WHERE anime_id = ? ORDER BY cycle_number ASC",
+            (anime_id,),
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+
+def set_viewing_goal(target_count: int, period: str = "WEEKLY", owner_id: str | None = None) -> None:
+    now = datetime.now().isoformat()
+    with sqlite3.connect(database_path_for_owner(owner_id), timeout=15) as conn:
+        conn.execute("DELETE FROM viewing_goals")
+        conn.execute(
+            "INSERT INTO viewing_goals (target_count, period, updated_at) VALUES (?, ?, ?)",
+            (max(1, target_count), period.upper(), now),
+        )
+
+
+def fetch_viewing_goal(
+    owner_id: str | None = None,
+) -> dict[str, Any] | None:
+    with sqlite3.connect(database_path_for_owner(owner_id), timeout=15) as conn:
+        conn.row_factory = sqlite3.Row
+        row = conn.execute("SELECT * FROM viewing_goals ORDER BY id DESC LIMIT 1").fetchone()
+        return dict(row) if row else None
+
+
+def export_sqlite_backup_base64(owner_id: str | None = None) -> str:
+    path = database_path_for_owner(owner_id)
+    if not path.exists():
+        return ""
+    with open(path, "rb") as f:
+        return base64.b64encode(f.read()).decode("utf-8")
+
+
+def restore_sqlite_backup_base64(encoded_data: str, owner_id: str | None = None) -> bool:
+    try:
+        raw_bytes = base64.b64decode(encoded_data.encode("utf-8"))
+        if not raw_bytes.startswith(b"SQLite format 3"):
+            return False
+        path = database_path_for_owner(owner_id)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with open(path, "wb") as f:
+            f.write(raw_bytes)
+        return True
+    except Exception:
+        return False

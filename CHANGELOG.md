@@ -1,5 +1,34 @@
 # Changelog
 
+## 1.8.0
+
+- Add Anime Wheel of Fortune Backlog Decision Maker (`pick_random_backlog`) to pick the next title based on mood, status, or duration filters.
+- Add Taste Match Compatibility Scorer (`calculate_taste_match_score`) matching user library preferences against candidate titles.
+- Add Curated Mood & Vibe Filter (`filter_by_mood`, `ANIME_MOODS`) supporting 6 distinct emotional vibes across discovery views.
+- Add Custom Shelves System (`CUSTOM_SHELVES`, `update_anime_shelf`, `batch_update_shelf`) for granular library organization (Favorites, Masterpiece, Guilty Pleasure, etc.).
+- Add Episode-Level Notes & Timestamps (`log_episode_note`, `fetch_episode_notes`) for granular episode reflections.
+- Add Key Production Staff & Directors display (`extract_staff_and_directors`) highlighting directors, character designers, and music composers.
+- Add Franchise Chronological Watch Order Roadmaps (`FRANCHISE_WATCH_ORDERS`, `get_franchise_watch_order`) for complex universes (Fate, Monogatari, Steins;Gate, etc.).
+- Add Dynamic Artwork Accent Palette derivation (`derive_artwork_accent_color`) for visual theme adaptation.
+- Add Opening & Ending Theme Song Video Previews (`get_theme_video_links`) with direct links to YouTube and AnimeThemes.
+- Add Seiyuu Cross-Over & Character Relationship Matrix (`build_seiyuu_character_matrix`) identifying shared voice actors in the user's library.
+- Add Anti-Spoiler Smart Masks (`apply_spoiler_mask`) protecting plot twists and critical synopsis keywords.
+- Add Otaku ID Passport & Library Card SVG Generator (`generate_otaku_passport_svg`) for shareable visual badges.
+- Add 5x5 Anime Watch Challenge Bingo Matrix (`BINGO_CHALLENGES`, `evaluate_bingo_card`) with automated completion evaluation.
+- Add Viewing Habit Rings & Weekly Episode Targets (`set_viewing_goal`, `fetch_viewing_goal`) with real-time goal progress tracking.
+- Add Rewatch Cycles & History Tracking (`record_rewatch_cycle`, `fetch_rewatch_cycles`) recording start/completion dates and repetition counts.
+- Add Two-User Taste Compatibility Matcher (`calculate_user_taste_compatibility`) calculating taste match percentages and cross-recommendations.
+- Add Visual Drag-and-Drop Tier List SVG Generator (`generate_tier_list_svg`) generating standalone graphic exports.
+- Add Direct AniList Profile Sync Payload Generator (`prepare_anilist_sync_payload`) for bi-directional status, score, and progress sync.
+- Add Kitsu Library Format Two-Way Export & Import (`export_kitsu_json`, `import_kitsu_json`).
+- Add SIMKL CSV Format Two-Way Export & Import (`export_simkl_csv`, `import_simkl_csv`).
+- Add Cloud SQLite Database Snapshot Base64 Export & Restore (`export_sqlite_backup_base64`, `restore_sqlite_backup_base64`) for zero-loss cloud migrations.
+- Add Discord Webhook Broadcast Notification Payloads (`generate_discord_webhook_payload`) for community activity sharing.
+- Add Media Subtypes Tagging (`MEDIA_SUBTYPES`) for TV, Movies, OVAs, ONAs, Specials, and Light Novels.
+- Add Interactive Keyboard Navigation Shortcuts cheatsheet in settings.
+- Add PWA Service Worker script generation (`generate_service_worker_js`) supporting offline asset caching.
+- Expand automated test suite to 110+ comprehensive unit and integration tests.
+
 ## 1.7.0
 
 - Refactor application into a modular architecture across domain packages (`modules.config`, `modules.db`, `modules.api`, `modules.services`, `modules.ui`).
