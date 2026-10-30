@@ -23,6 +23,7 @@ from modules.api import (
 )
 from modules.config import (
     ANIME_MOODS,
+    CHARACTER_TROPES,
     WATCH_STATUSES,
     offline_mode_enabled,
 )
@@ -30,6 +31,7 @@ from modules.db import (
     batch_add_tag,
     batch_remove_anime,
     batch_update_status,
+    create_user_profile,
     db_rows,
     delete_owner_data,
     export_sqlite_backup_base64,
@@ -37,6 +39,7 @@ from modules.db import (
     fetch_watch_history,
     import_watchlist,
     increment_watchlist_progress,
+    list_user_profiles,
     remove_anime,
     restore_sqlite_backup_base64,
     save_anime,
@@ -46,12 +49,17 @@ from modules.db import (
 from modules.services import (
     banner_image_url,
     build_seiyuu_character_matrix,
+    calculate_drop_off_statistics,
+    calculate_era_distribution,
     calculate_runtime_display,
+    calculate_seiyuu_screen_time,
+    calculate_studio_loyalty_index,
     calculate_user_taste_compatibility,
     calculate_watch_streak,
     calculate_watch_velocity,
     clean_description,
     cover_image_url,
+    create_custom_theme_palette,
     display_title,
     estimate_completion_date,
     evaluate_achievements,
@@ -70,8 +78,14 @@ from modules.services import (
     format_row_airing,
     format_trailer_url,
     generate_airing_ics,
+    generate_anime_wrapped_data,
+    generate_anime_wrapped_svg,
+    generate_bujo_tracker_html,
+    generate_bujo_tracker_markdown,
     generate_music_links,
     generate_otaku_passport_svg,
+    generate_watchlist_rss_feed,
+    get_filler_guide,
     get_franchise_watch_order,
     get_theme_video_links,
     pick_random_backlog,
@@ -191,6 +205,24 @@ def show_anime_details(anime_id: int) -> None:
         st.divider()
         st.subheader("🎬 Key Production Staff & Directors")
         st.write(", ".join(f"**{m['name']}** ({m['role']})" for m in staff_members[:6]))
+
+    filler_guide = get_filler_guide(title)
+    if filler_guide:
+        st.divider()
+        st.subheader("⚡ Canon vs. Filler Guide")
+        st.caption(f"💡 **Tip:** {filler_guide['tip']}")
+        f1, f2, f3 = st.columns(3)
+        f1.metric("Total Episodes", filler_guide["total"])
+        f2.metric("Filler Episodes", filler_guide["filler_count"])
+        f3.metric("Filler Percentage", f"{filler_guide['filler_percentage']}%")
+        with st.expander("Inspect Filler Ranges & Canon Breakdowns", expanded=False):
+            st.write("**Non-Canon Filler Ranges:**")
+            st.write(
+                ", ".join(
+                    f"Episodes {start}-{end}" if start != end else f"Episode {start}"
+                    for start, end in filler_guide["filler_ranges"]
+                )
+            )
 
     franchise_info = get_franchise_watch_order(title)
     if franchise_info:
@@ -608,6 +640,49 @@ def render_analytics(rows: list[dict[str, Any]], owner_id: str | None = None) ->
         else:
             st.info("Log more titles with Japanese voice actors to view your personal cast cross-over matrix.")
 
+    with st.expander("🎁 Spotify-Style Anime Wrapped (Annual Dossier)", expanded=False):
+        st.caption("Generate your shareable annual anime infographic card:")
+        wrapped_data = generate_anime_wrapped_data(rows, history)
+        wrapped_svg = generate_anime_wrapped_svg(wrapped_data)
+        st.download_button(
+            "🎴 Download Anime Wrapped Infographic (.svg)",
+            wrapped_svg,
+            file_name="otaku_orbit_wrapped.svg",
+            mime="image/svg+xml",
+            use_container_width=True,
+        )
+        st.write(
+            f"**Assigned Archetype:** {wrapped_data['archetype']['icon']} **{wrapped_data['archetype']['title']}** ({wrapped_data['archetype']['tagline']})"
+        )
+        st.write(
+            f"**Total Screen Time:** {wrapped_data['total_hours']} Hours across {wrapped_data['total_episodes']} episodes"
+        )
+
+    with st.expander("🏢 Animation Studio Loyalty & Seiyuu Screen-Time", expanded=False):
+        loyalty = calculate_studio_loyalty_index(rows)
+        if loyalty:
+            for studio_name, s_data in list(loyalty.items())[:6]:
+                score_str = f"⭐ {s_data['avg_score']}/100" if s_data["avg_score"] else "Unrated"
+                st.write(
+                    f"**{studio_name}**: {s_data['titles']} titles tracked · {s_data['episodes']} eps · {score_str}"
+                )
+        st.divider()
+        st.caption("🎙️ Cumulative Seiyuu (Voice Actor) Listening Time:")
+        seiyuu_times = calculate_seiyuu_screen_time(rows)
+        for st_item in seiyuu_times[:5]:
+            st.write(f"🎙️ **{st_item['actor']}**: {st_item['hours']} hours ({st_item['minutes']} mins)")
+
+    with st.expander("📉 The 3-Episode Rule & Drop-off Statistics", expanded=False):
+        drop_stats = calculate_drop_off_statistics(rows)
+        st.write(f"**Total Dropped Series:** {drop_stats['dropped_count']} ({drop_stats['drop_rate_pct']}% drop rate)")
+        st.write(f"**The 3-Episode Rule Drop Rate:** {drop_stats['rule_of_three_pct']}% dropped on or before ep 3")
+        st.write(f"**Median Drop Episode:** Episode {drop_stats['median_drop_episode']}")
+
+    with st.expander("⏳ Historical Era & Decade Chronology", expanded=False):
+        eras = calculate_era_distribution(rows)
+        for era_name, count in eras.items():
+            st.write(f"**{era_name}**: {count} titles")
+
     render_tier_list_maker(rows)
 
 
@@ -852,6 +927,28 @@ def render_watchlist(owner_id: str | None = None) -> None:
             mime="text/csv",
             use_container_width=True,
         )
+        c_bujo1, c_bujo2 = st.columns(2)
+        c_bujo1.download_button(
+            "📓 Printable Bullet Journal (.md)",
+            generate_bujo_tracker_markdown(rows),
+            file_name="otaku_orbit_bullet_journal.md",
+            mime="text/markdown",
+            use_container_width=True,
+        )
+        c_bujo2.download_button(
+            "🖨️ Printable Tracker (.html)",
+            generate_bujo_tracker_html(rows),
+            file_name="otaku_orbit_tracker.html",
+            mime="text/html",
+            use_container_width=True,
+        )
+        st.download_button(
+            "📡 Personal Airing Schedule RSS Feed (.xml)",
+            generate_watchlist_rss_feed(rows),
+            file_name="otaku_orbit_watchlist_rss.xml",
+            mime="application/rss+xml",
+            use_container_width=True,
+        )
 
         uploaded = st.file_uploader("Restore JSON backup", type="json")
         if uploaded is not None and st.button("Restore backup", use_container_width=True):
@@ -981,6 +1078,26 @@ def render_settings(owner_id: str | None = None) -> None:
             else:
                 st.error("Invalid database snapshot string.")
 
+    with st.expander("🎨 Custom Theme Studio"):
+        st.caption("Design and save custom neon color accents:")
+        th_c1, th_c2, th_c3 = st.columns(3)
+        p_hex = th_c1.color_picker("Primary Neon", "#f4b8ff")
+        g_glow = th_c2.color_picker("Glow Accent", "#6f4cff")
+        m_hex = th_c3.color_picker("Metric Color", "#f4b8ff")
+        if st.button("Apply Custom Theme"):
+            st.session_state["custom_theme"] = create_custom_theme_palette(p_hex, f"{g_glow}55", m_hex)
+            st.success("Custom theme applied!")
+
+    with st.expander("👥 Multi-Profile Household Switcher"):
+        st.caption("Switch between distinct local library profiles:")
+        profiles = list_user_profiles(owner_id)
+        st.selectbox("Current Profile", profiles, index=0)
+        p_name_input = st.text_input("New Profile Name", placeholder="e.g. Manga Only, Family SFW")
+        if st.button("Create Profile") and p_name_input:
+            if create_user_profile(p_name_input, owner_id):
+                st.success(f"Profile '{p_name_input}' created!")
+                st.rerun()
+
     with st.expander("⌨️ Keyboard Navigation Shortcuts"):
         st.markdown("""
         - `/` : Focus title search bar
@@ -1022,7 +1139,9 @@ def render_discover(saved_ids: set[int], owner_id: str | None = None) -> None:
         '<div class="orbit-muted">Search AniList, save what catches your eye, and let your watchlist become your personal anime map.</div></div>',
         unsafe_allow_html=True,
     )
-    query = st.text_input("Search titles", placeholder="Try Frieren, One Piece, or Cowboy Bebop")
+    s_col1, s_col2 = st.columns([1.5, 1])
+    query = s_col1.text_input("Search titles", placeholder="Try Frieren, One Piece, or Cowboy Bebop")
+    s_col2.selectbox("🎭 Character Dynamic / Trope", ["All Tropes", *CHARACTER_TROPES.keys()])
     m_type = st.session_state.get("global_media_type", "ANIME")
     if offline_mode_enabled():
         results = []

@@ -838,7 +838,7 @@ def test_modular_package_exports():
     assert hasattr(modules, "anilist_query")
     assert hasattr(modules, "calculate_watch_streak")
     assert hasattr(modules, "render_watchlist")
-    assert modules.APP_VERSION == "1.8.0"
+    assert modules.APP_VERSION == "1.9.0"
 
 
 def test_composite_database_indices(isolated_db):
@@ -1233,3 +1233,332 @@ def test_v18_discord_webhook_and_service_worker():
     sync_payload = prepare_anilist_sync_payload(123, "COMPLETED", 24, 90)
     assert "SaveMediaListEntry" in sync_payload["query"]
     assert sync_payload["variables"]["mediaId"] == 123
+
+
+def test_v19_filler_guides_and_canon():
+    from modules.services import get_filler_guide, get_next_canon_episode, is_episode_filler
+
+    guide = get_filler_guide("Naruto")
+    assert guide is not None
+    assert guide["total"] == 220
+    assert guide["filler_count"] > 80
+    assert guide["filler_percentage"] > 35.0
+
+    assert is_episode_filler("Naruto", 101) is True
+    assert is_episode_filler("Naruto", 1) is False
+    assert is_episode_filler("Unknown Series", 5) is False
+
+    next_canon = get_next_canon_episode("Naruto", 101)
+    assert next_canon == 107
+
+    guide_bleach = get_filler_guide("Bleach")
+    assert guide_bleach is not None
+    assert is_episode_filler("Bleach", 64) is True
+
+
+def test_v19_vibe_search_and_trope_matcher():
+    from modules.services import match_anime_by_trope, search_by_vibe
+
+    catalogue = [
+        {
+            "id": 1,
+            "title": {"english": "Cyberpunk Edgerunners", "romaji": "Cyberpunk Edgerunners"},
+            "description": "A street kid trying to survive in a technology and body modification-obsessed city of the future.",
+            "genres": ["Action", "Sci-Fi", "Psychological"],
+        },
+        {
+            "id": 2,
+            "title": {"english": "Yuru Camp", "romaji": "Yuru Camp"},
+            "description": "Cozy camping outdoors in peaceful nature with warm hotpot soup.",
+            "genres": ["Slice of Life", "Comedy"],
+        },
+    ]
+
+    results_cyber = search_by_vibe("dark futuristic cyberpunk city technology", catalogue)
+    assert len(results_cyber) >= 1
+    assert results_cyber[0]["id"] == 1
+
+    results_camp = search_by_vibe("cozy peaceful warm camping", catalogue)
+    assert len(results_camp) >= 1
+    assert results_camp[0]["id"] == 2
+
+    rivalry_matches = match_anime_by_trope("Rivalry Duo", catalogue)
+    assert any(a["id"] == 1 for a in rivalry_matches)
+
+
+def test_v19_backlog_priority_and_sequel_radar():
+    from modules.services import calculate_backlog_priority, detect_franchise_sequels
+
+    rows = [
+        {"title": "Show Short", "status": "PLANNING", "user_score": 90, "episodes": 12},
+        {"title": "Show Long", "status": "PLANNING", "user_score": 85, "episodes": 100},
+        {"title": "Show Mid", "status": "PLANNING", "user_score": 70, "episodes": 24},
+    ]
+
+    prioritized = calculate_backlog_priority(rows)
+    assert prioritized[0]["title"] == "Show Short"
+
+    completed = [
+        {"title": "Attack on Titan Season 1", "status": "COMPLETED"},
+        {"title": "Steins;Gate", "status": "COMPLETED"},
+    ]
+    catalogue = [
+        {"title": {"english": "Attack on Titan Season 2", "romaji": "Attack on Titan Season 2"}},
+        {"title": {"english": "Steins;Gate 0", "romaji": "Steins;Gate 0"}},
+        {"title": {"english": "Unrelated Anime", "romaji": "Unrelated Anime"}},
+    ]
+    detected = detect_franchise_sequels(completed, catalogue)
+    assert len(detected) >= 2
+
+
+def test_v19_ambient_glow_and_custom_theme():
+    from modules.services import create_custom_theme_palette, generate_ambient_glow_css
+
+    css = generate_ambient_glow_css("#00f0ff")
+    assert "<style>" in css
+    assert "#00f0ff" in css
+    assert "radial-gradient" in css
+
+    theme = create_custom_theme_palette("#ff007f", "rgba(255,0,127,0.3)", "#00ffcc", "#0a0a14")
+    assert theme["primary"] == "#ff007f"
+    assert theme["metric"] == "#00ffcc"
+    assert "rgba" in theme["glow"]
+
+
+def test_v19_cinematic_modal_and_mini_dock():
+    from modules.services import (
+        generate_cinematic_modal_html,
+        get_mini_dock_state,
+        get_sound_effects_data_uris,
+    )
+
+    anime = {
+        "id": 101,
+        "title": {"english": "Cinematic Test", "romaji": "Cinematic Test"},
+        "bannerImage": "https://example.com/banner.jpg",
+        "averageScore": 92,
+        "episodes": 24,
+        "format": "TV",
+        "description": "An epic journey through deep space and starlight.",
+    }
+    html_code = generate_cinematic_modal_html(anime)
+    assert "Cinematic Test" in html_code
+    assert "92%" in html_code
+
+    rows = [
+        {"anime_id": 101, "title": "In Progress Anime", "status": "WATCHING", "progress": 5, "episodes": 12},
+    ]
+    dock = get_mini_dock_state(rows)
+    assert dock is not None
+    assert dock["title"] == "In Progress Anime"
+    assert dock["progress"] == 5
+    assert dock["next_episode"] == 6
+
+    sounds = get_sound_effects_data_uris()
+    assert "click" in sounds
+    assert "data:audio/wav;base64" in sounds["click"]
+
+
+def test_v19_anime_wrapped_and_fantasy_league():
+    from modules.services import (
+        evaluate_fantasy_score,
+        generate_anime_wrapped_data,
+        generate_anime_wrapped_svg,
+    )
+
+    rows = [
+        {
+            "title": "Anime A",
+            "status": "COMPLETED",
+            "progress": 12,
+            "episodes": 12,
+            "genres": "Action, Shounen",
+            "duration": 24,
+        },
+        {"title": "Anime B", "status": "COMPLETED", "progress": 24, "episodes": 24, "genres": "Action", "duration": 24},
+    ]
+    history = [
+        {"watched_at": "2026-10-24T12:00:00"},
+        {"watched_at": "2026-10-24T14:00:00"},
+    ]
+
+    wrapped_data = generate_anime_wrapped_data(rows, history)
+    assert wrapped_data["total_episodes"] == 36
+    assert wrapped_data["completed_count"] == 2
+    assert wrapped_data["top_genre"] == "Action"
+    assert "Shonen Champion" in wrapped_data["archetype"]["title"]
+
+    svg_wrapped = generate_anime_wrapped_svg(wrapped_data, "TestHero")
+    assert "<svg" in svg_wrapped
+    assert "TESTHERO" in svg_wrapped
+    assert "OTAKU ORBIT WRAPPED" in svg_wrapped
+
+    predictions = [
+        {"anime_id": 1, "predicted_rank": 1},
+        {"anime_id": 2, "predicted_rank": 3},
+    ]
+    actual_ranks = {1: 1, 2: 4}
+    score = evaluate_fantasy_score(predictions, actual_ranks)
+    assert score == 160
+
+
+def test_v19_bujo_tracker_and_tier_templates():
+    from modules.services import (
+        generate_bujo_tracker_html,
+        generate_bujo_tracker_markdown,
+        get_tier_list_template,
+    )
+
+    rows = [
+        {"title": "Frieren", "status": "COMPLETED", "progress": 28, "episodes": 28, "user_score": 100},
+    ]
+    bujo_md = generate_bujo_tracker_markdown(rows)
+    assert "# 📓 Otaku Orbit Bullet Journal" in bujo_md
+    assert "Frieren" in bujo_md
+    assert "★★★★★" in bujo_md
+
+    bujo_html = generate_bujo_tracker_html(rows)
+    assert "<!DOCTYPE html>" in bujo_html
+    assert "Frieren" in bujo_html
+
+    template = get_tier_list_template("Opening Themes (OST)")
+    assert "S" in template
+    assert "Legendary Banger" in template["S"]
+
+
+def test_v19_watch_party_sync_and_studio_loyalty():
+    from modules.services import (
+        calculate_studio_loyalty_index,
+        generate_watch_party_sync_link,
+        parse_watch_party_sync_link,
+    )
+
+    link = generate_watch_party_sync_link(555, "Chainsaw Man", 12, 120)
+    assert "party=1" in link
+    assert "anime_id=555" in link
+
+    parsed = parse_watch_party_sync_link(link)
+    assert parsed["is_party"] is True
+    assert parsed["anime_id"] == 555
+    assert parsed["episode"] == 12
+    assert parsed["timestamp_sec"] == 120
+
+    rows = [
+        {"title": "Demon Slayer by Ufotable", "progress": 26, "user_score": 95},
+        {"title": "Fate UBW (Ufotable)", "progress": 25, "user_score": 90},
+    ]
+    loyalty = calculate_studio_loyalty_index(rows)
+    assert "Ufotable" in loyalty
+    assert loyalty["Ufotable"]["titles"] == 2
+    assert loyalty["Ufotable"]["episodes"] == 51
+    assert loyalty["Ufotable"]["avg_score"] == 92.5
+
+
+def test_v19_seiyuu_screen_time_and_drop_off():
+    from modules.services import (
+        calculate_drop_off_statistics,
+        calculate_era_distribution,
+        calculate_seiyuu_screen_time,
+    )
+
+    rows = [
+        {
+            "title": "Anime Mamoru",
+            "progress": 24,
+            "duration": 24,
+            "characters_json": '[{"seiyuu": "Mamoru Miyano", "character": "Light"}]',
+        }
+    ]
+    st_data = calculate_seiyuu_screen_time(rows)
+    assert len(st_data) >= 1
+    assert st_data[0]["actor"] == "Mamoru Miyano"
+    assert st_data[0]["minutes"] == 576
+
+    dropped_rows = [
+        {"title": "Dropped Quick", "status": "DROPPED", "progress": 2},
+        {"title": "Dropped Mid", "status": "DROPPED", "progress": 7},
+        {"title": "Finished", "status": "COMPLETED", "progress": 12},
+    ]
+    drop_stats = calculate_drop_off_statistics(dropped_rows)
+    assert drop_stats["dropped_count"] == 2
+    assert drop_stats["rule_of_three_pct"] == 50.0
+
+    era_rows = [
+        {"title": "Modern Show", "next_airing_at": 1700000000},
+    ]
+    eras = calculate_era_distribution(era_rows)
+    assert "2020s Next-Gen Era" in eras
+
+
+def test_v19_pacing_alert_and_custom_webhook():
+    from datetime import datetime
+
+    from modules.services import evaluate_pacing_alert, generate_custom_webhook_payload
+
+    history_ahead = [{"watched_at": datetime.now().isoformat()} for _ in range(15)]
+    alert_ahead = evaluate_pacing_alert(history_ahead, weekly_goal=10)
+    assert alert_ahead["status"] == "ahead"
+    assert alert_ahead["watched_this_week"] == 15
+
+    alert_behind = evaluate_pacing_alert([], weekly_goal=10)
+    assert alert_behind["status"] == "behind"
+
+    payload = generate_custom_webhook_payload(
+        "EPISODE_COMPLETED", {"title": "Frieren", "progress": 28, "user_score": 100}
+    )
+    assert payload["event"] == "EPISODE_COMPLETED"
+    assert payload["anime"]["title"] == "Frieren"
+    assert payload["anime"]["score"] == 100
+
+
+def test_v19_multi_profile_and_api_tokens(isolated_db):
+    from modules.db import (
+        create_user_profile,
+        delete_user_profile,
+        fetch_api_token,
+        fetch_fantasy_predictions,
+        list_user_profiles,
+        record_fantasy_prediction,
+        save_api_token,
+    )
+
+    profiles = list_user_profiles()
+    assert "Default" in profiles
+
+    created = create_user_profile("Family SFW")
+    assert created is True
+    assert "Family SFW" in list_user_profiles()
+
+    deleted = delete_user_profile("Family SFW")
+    assert deleted is True
+
+    save_api_token("anilist", "test_oauth_token_12345")
+    fetched = fetch_api_token("anilist")
+    assert fetched == "test_oauth_token_12345"
+
+    pred_id = record_fantasy_prediction("FALL", 2026, 999, "Chainsaw Man S2", predicted_rank=1)
+    assert pred_id > 0
+    preds = fetch_fantasy_predictions("FALL", 2026)
+    assert len(preds) == 1
+    assert preds[0]["anime_title"] == "Chainsaw Man S2"
+
+
+def test_v19_direct_sync_gist_and_rss():
+    from modules.services import (
+        generate_direct_sync_request,
+        generate_watchlist_rss_feed,
+        prepare_gist_backup_payload,
+    )
+
+    sync_req = generate_direct_sync_request("anilist", "token123", "UPDATE", {"id": 10})
+    assert sync_req["method"] == "POST"
+    assert "Bearer token123" in sync_req["headers"]["Authorization"]
+
+    gist = prepare_gist_backup_payload([{"title": "Anime Test", "status": "COMPLETED"}])
+    assert "files" in gist
+    assert "otaku_orbit_backup.json" in gist["files"]
+
+    rss = generate_watchlist_rss_feed([{"anime_id": 1, "title": "RSS Show", "progress": 1, "next_airing_episode": 2}])
+    assert "<?xml" in rss
+    assert '<rss version="2.0">' in rss
+    assert "RSS Show - Episode 2" in rss

@@ -151,6 +151,32 @@ def init_db(owner_id: str | None = None) -> None:
             updated_at TEXT NOT NULL
         )""")
 
+        connection.execute("""CREATE TABLE IF NOT EXISTS fantasy_predictions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            season TEXT NOT NULL,
+            year INTEGER NOT NULL,
+            anime_id INTEGER NOT NULL,
+            anime_title TEXT NOT NULL,
+            predicted_rank INTEGER NOT NULL DEFAULT 1,
+            actual_rank INTEGER,
+            points INTEGER DEFAULT 0,
+            created_at TEXT NOT NULL
+        )""")
+        connection.execute("""CREATE INDEX IF NOT EXISTS idx_fantasy_season ON fantasy_predictions(season, year)""")
+
+        connection.execute("""CREATE TABLE IF NOT EXISTS user_profiles (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            profile_name TEXT UNIQUE NOT NULL,
+            created_at TEXT NOT NULL
+        )""")
+
+        connection.execute("""CREATE TABLE IF NOT EXISTS api_tokens (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            service TEXT UNIQUE NOT NULL,
+            token TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )""")
+
 
 def db_rows(owner_id: str | None = None) -> list[dict[str, Any]]:
     with sqlite3.connect(database_path_for_owner(owner_id), timeout=15) as connection:
@@ -647,3 +673,88 @@ def restore_sqlite_backup_base64(encoded_data: str, owner_id: str | None = None)
         return True
     except Exception:
         return False
+
+
+def record_fantasy_prediction(
+    season: str,
+    year: int,
+    anime_id: int,
+    anime_title: str,
+    predicted_rank: int = 1,
+    owner_id: str | None = None,
+) -> int:
+    now = datetime.now().isoformat()
+    with sqlite3.connect(database_path_for_owner(owner_id), timeout=15) as conn:
+        cur = conn.execute(
+            """INSERT INTO fantasy_predictions (season, year, anime_id, anime_title, predicted_rank, created_at)
+            VALUES (?, ?, ?, ?, ?, ?)""",
+            (season.upper(), year, anime_id, anime_title.strip(), predicted_rank, now),
+        )
+        return int(cur.lastrowid or 0)
+
+
+def fetch_fantasy_predictions(
+    season: str | None = None,
+    year: int | None = None,
+    owner_id: str | None = None,
+) -> list[dict[str, Any]]:
+    with sqlite3.connect(database_path_for_owner(owner_id), timeout=15) as conn:
+        conn.row_factory = sqlite3.Row
+        if season and year:
+            rows = conn.execute(
+                "SELECT * FROM fantasy_predictions WHERE season = ? AND year = ? ORDER BY predicted_rank ASC",
+                (season.upper(), year),
+            ).fetchall()
+        else:
+            rows = conn.execute("SELECT * FROM fantasy_predictions ORDER BY id DESC").fetchall()
+        return [dict(r) for r in rows]
+
+
+def list_user_profiles(owner_id: str | None = None) -> list[str]:
+    with sqlite3.connect(database_path_for_owner(owner_id), timeout=15) as conn:
+        rows = conn.execute("SELECT profile_name FROM user_profiles ORDER BY profile_name ASC").fetchall()
+        profiles = [r[0] for r in rows]
+        if "Default" not in profiles:
+            profiles.insert(0, "Default")
+        return profiles
+
+
+def create_user_profile(profile_name: str, owner_id: str | None = None) -> bool:
+    name = profile_name.strip()
+    if not name or name.lower() == "default":
+        return False
+    now = datetime.now().isoformat()
+    try:
+        with sqlite3.connect(database_path_for_owner(owner_id), timeout=15) as conn:
+            conn.execute(
+                "INSERT INTO user_profiles (profile_name, created_at) VALUES (?, ?)",
+                (name, now),
+            )
+            return True
+    except sqlite3.IntegrityError:
+        return False
+
+
+def delete_user_profile(profile_name: str, owner_id: str | None = None) -> bool:
+    name = profile_name.strip()
+    if not name or name.lower() == "default":
+        return False
+    with sqlite3.connect(database_path_for_owner(owner_id), timeout=15) as conn:
+        cur = conn.execute("DELETE FROM user_profiles WHERE profile_name = ?", (name,))
+        return cur.rowcount > 0
+
+
+def save_api_token(service: str, token: str, owner_id: str | None = None) -> None:
+    now = datetime.now().isoformat()
+    with sqlite3.connect(database_path_for_owner(owner_id), timeout=15) as conn:
+        conn.execute(
+            """INSERT INTO api_tokens (service, token, updated_at) VALUES (?, ?, ?)
+            ON CONFLICT(service) DO UPDATE SET token=excluded.token, updated_at=excluded.updated_at""",
+            (service.strip().lower(), token.strip(), now),
+        )
+
+
+def fetch_api_token(service: str, owner_id: str | None = None) -> str | None:
+    with sqlite3.connect(database_path_for_owner(owner_id), timeout=15) as conn:
+        row = conn.execute("SELECT token FROM api_tokens WHERE service = ?", (service.strip().lower(),)).fetchone()
+        return str(row[0]) if row else None
