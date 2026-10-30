@@ -37,7 +37,7 @@ def test_streamlit_version_is_pinned_for_older_mobile_browsers():
 
 
 def test_mobile_css_breakpoint_is_present_in_app_source():
-    source = Path(app.__file__).read_text()
+    source = Path(app.__file__).read_text(encoding="utf-8")
     assert "@media (max-width: 768px)" in source
 
 
@@ -610,3 +610,217 @@ def test_backup_validation_supports_rewatches_and_tags():
     assert validated["rewatches"] == 4
     assert validated["tags"] == "Mecha, Psychological"
     assert validated["banner_image"] == "https://s4.anilist.co/eva.jpg"
+
+
+def test_extract_streaming_links():
+    anime = {
+        "externalLinks": [
+            {"site": "Crunchyroll", "url": "https://crunchyroll.com/show", "type": "STREAMING"},
+            {"site": "Netflix", "url": "https://netflix.com/title/123", "type": "STREAMING"},
+            {"site": "Twitter", "url": "https://twitter.com/anime", "type": "INFO"},
+        ],
+        "streamingEpisodes": [
+            {"site": "Crunchyroll", "url": "https://crunchyroll.com/ep1"},
+            {"site": "VRV", "url": "https://vrv.co/ep1"},
+        ],
+    }
+    links = app.extract_streaming_links(anime)
+    urls = [link["url"] for link in links]
+    assert "https://crunchyroll.com/show" in urls
+    assert "https://netflix.com/title/123" in urls
+    assert "https://vrv.co/ep1" in urls
+    assert "https://twitter.com/anime" not in urls
+
+
+def test_extract_characters_and_seiyuu():
+    anime = {
+        "characters": {
+            "edges": [
+                {
+                    "role": "MAIN",
+                    "node": {
+                        "id": 1,
+                        "name": {"full": "Frieren", "native": "フリーレン"},
+                        "image": {"large": "https://s4.anilist.co/frieren.jpg"},
+                    },
+                    "voiceActors": [
+                        {
+                            "id": 10,
+                            "name": {"full": "Atsumi Tanezaki", "native": "種﨑敦美"},
+                            "image": {"large": "https://s4.anilist.co/atsumi.jpg"},
+                        }
+                    ],
+                }
+            ]
+        }
+    }
+    cast = app.extract_characters_and_seiyuu(anime)
+    assert len(cast) == 1
+    assert cast[0]["character"] == "Frieren"
+    assert cast[0]["role"] == "Main"
+    assert cast[0]["seiyuu"] == "Atsumi Tanezaki"
+
+
+def test_filter_anime_by_source_and_studio():
+    items = [
+        {
+            "id": 1,
+            "source": "MANGA",
+            "studios": {"nodes": [{"name": "MAPPA"}]},
+            "genres": ["Action"],
+            "averageScore": 85,
+        },
+        {
+            "id": 2,
+            "source": "LIGHT_NOVEL",
+            "studios": {"nodes": [{"name": "CloverWorks"}]},
+            "genres": ["Drama"],
+            "averageScore": 80,
+        },
+    ]
+    assert len(app.filter_anime(items, source="MANGA")) == 1
+    assert app.filter_anime(items, source="MANGA")[0]["id"] == 1
+    assert len(app.filter_anime(items, studio="CloverWorks")) == 1
+    assert app.filter_anime(items, studio="CloverWorks")[0]["id"] == 2
+    assert len(app.filter_anime(items, studio="Bones")) == 0
+
+
+def test_generate_music_links():
+    links = app.generate_music_links("Chainsaw Man")
+    assert "spotify.com" in links["Spotify OP"]
+    assert "spotify.com" in links["Spotify ED"]
+    assert "music.youtube.com" in links["YouTube Music"]
+
+
+def test_watch_history_and_streak(isolated_db):
+    app.save_anime({"id": 10, "title": {"english": "Steins;Gate"}, "episodes": 24})
+    now = app.datetime.now().isoformat()
+    app.record_watch_history(10, "Steins;Gate", 1, watched_at=now)
+    history = app.fetch_watch_history(days=10)
+    assert len(history) >= 1
+    assert history[0]["episode"] == 1
+    streak = app.calculate_watch_streak(history)
+    assert streak >= 1
+
+
+def test_watch_velocity_and_completion_date():
+    history = [
+        {"watched_at": "2026-10-30T12:00:00", "episode": 1},
+        {"watched_at": "2026-10-30T14:00:00", "episode": 2},
+        {"watched_at": "2026-10-29T12:00:00", "episode": 3},
+    ]
+    velocity = app.calculate_watch_velocity(history)
+    assert velocity > 0
+    completion = app.estimate_completion_date(10, velocity)
+    assert completion is not None
+
+
+def test_evaluate_achievements():
+    rows = [
+        {
+            "anime_id": 1,
+            "status": "COMPLETED",
+            "progress": 25,
+            "user_score": 90,
+            "genres": "Action, Sci-Fi",
+            "tags": "Favorite",
+        },
+        {
+            "anime_id": 2,
+            "status": "WATCHING",
+            "progress": 80,
+            "user_score": 85,
+            "genres": "Comedy, Romance, Mystery",
+            "tags": "Cozy",
+        },
+    ]
+    history = [{"watched_at": "2026-10-30T10:00:00"} for _ in range(6)]
+    achievements = app.evaluate_achievements(rows, history)
+    unlocked_ids = {a["id"] for a in achievements if a["unlocked"]}
+    assert "first_step" in unlocked_ids
+    assert "rookie" in unlocked_ids
+    assert "centurion" in unlocked_ids
+    assert "binge_demon" in unlocked_ids
+    assert "polymath" in unlocked_ids
+    assert "archivist" in unlocked_ids
+
+
+def test_generate_airing_ics():
+    rows = [
+        {
+            "anime_id": 101,
+            "title": "Demon Slayer",
+            "next_airing_at": 1800000000,
+            "next_airing_episode": 4,
+            "duration": 24,
+        }
+    ]
+    ics = app.generate_airing_ics(rows)
+    assert "BEGIN:VCALENDAR" in ics
+    assert "Demon Slayer - Episode 4" in ics
+    assert "END:VCALENDAR" in ics
+
+
+def test_get_next_airing_countdown():
+    near_future = int(app.time.time()) + 3600
+    rows = [{"title": "Jujutsu Kaisen", "next_airing_at": near_future, "next_airing_episode": 12}]
+    res = app.get_next_airing_countdown(rows)
+    assert res is not None
+    assert res["title"] == "Jujutsu Kaisen"
+    assert res["episode"] == 12
+    assert res["hours"] >= 0
+
+
+def test_sync_anilist_profile(monkeypatch, isolated_db):
+    def fake_response(query, variables):
+        return {
+            "MediaListCollection": {
+                "lists": [
+                    {
+                        "name": "Completed",
+                        "status": "COMPLETED",
+                        "entries": [
+                            {
+                                "status": "COMPLETED",
+                                "progress": 12,
+                                "score": 95,
+                                "repeat": 1,
+                                "notes": "Masterpiece",
+                                "media": {
+                                    "id": 555,
+                                    "siteUrl": "https://anilist.co/anime/555",
+                                    "title": {"english": "Synced Title"},
+                                    "episodes": 12,
+                                    "averageScore": 90,
+                                },
+                            }
+                        ],
+                    }
+                ]
+            }
+        }
+
+    monkeypatch.setattr(app, "anilist_response", fake_response)
+    count = app.sync_anilist_profile("testuser")
+    assert count == 1
+    rows = app.db_rows()
+    assert len(rows) == 1
+    assert rows[0]["title"] == "Synced Title"
+    assert rows[0]["status"] == "COMPLETED"
+    assert rows[0]["user_score"] == 95
+
+
+def test_manga_tracking_columns(isolated_db):
+    with sqlite3.connect(isolated_db) as conn:
+        cols = {row[1] for row in conn.execute("PRAGMA table_info(watchlist)")}
+        assert "media_type" in cols
+        assert "chapters" in cols
+        assert "volumes" in cols
+
+
+def test_pwa_manifest_file_exists():
+    manifest_file = Path(__file__).parents[1] / "manifest.json"
+    assert manifest_file.exists()
+    data = json.loads(manifest_file.read_text(encoding="utf-8"))
+    assert data["display"] == "standalone"
+    assert data["short_name"] == "Otaku Orbit"

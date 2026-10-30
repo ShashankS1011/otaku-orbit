@@ -6,6 +6,7 @@ import html
 import io
 import json
 import logging
+import math
 import os
 import random
 import re
@@ -14,10 +15,10 @@ import threading
 import time
 import uuid
 from collections.abc import Callable
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any
-from urllib.parse import urlparse
+from urllib.parse import quote, urlparse
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import requests
@@ -43,7 +44,7 @@ def offline_mode_enabled() -> bool:
 
 
 APP_NAME = "Otaku Orbit"
-APP_VERSION = "1.5.0"
+APP_VERSION = "1.6.0"
 APP_URL = "https://otaku-orbit.streamlit.app/"
 SUPPORT_LINK = "https://discord.com/channels/@me/1252520070043668561/1562171196617785464"
 AUTHOR_CREDIT = "Made by Shashank — powered by Saiyan spirit"
@@ -53,6 +54,7 @@ REQUEST_ATTEMPTS = max(1, _env_int("OTAKU_ORBIT_REQUEST_ATTEMPTS", 3))
 REQUEST_TIMEOUT = max(1.0, _env_float("OTAKU_ORBIT_REQUEST_TIMEOUT", 15.0))
 API_CACHE_TTL = max(60, _env_int("OTAKU_ORBIT_CACHE_TTL", 900))
 WATCH_STATUSES = ["WATCHING", "REWATCHING", "PLANNING", "COMPLETED", "DROPPED"]
+MANGA_STATUSES = ["READING", "REREADING", "PLAN_TO_READ", "COMPLETED", "DROPPED"]
 BACKUP_FORMAT_VERSION = 1
 SUPPORTED_TIMEZONES = ["UTC", "Asia/Kolkata", "America/New_York", "Europe/London", "Asia/Tokyo", "Australia/Sydney"]
 THEME_PALETTES = {
@@ -81,6 +83,18 @@ THEME_PALETTES = {
         "sidebar": "linear-gradient(180deg, #102419 0%, #0a140f 100%)",
     },
 }
+
+ACHIEVEMENTS = [
+    {"id": "first_step", "title": "First Step", "desc": "Add your first anime to your library", "icon": "🌱"},
+    {"id": "rookie", "title": "Rookie Explorer", "desc": "Complete your first anime series", "icon": "🥉"},
+    {"id": "centurion", "title": "Otaku Centurion", "desc": "Watch 100 or more total episodes", "icon": "🥇"},
+    {"id": "binge_demon", "title": "Binge Sprinter", "desc": "Log 5 or more episodes in a single day", "icon": "⚡"},
+    {"id": "time_leaper", "title": "Time Leaper", "desc": "Log at least 1 rewatch cycle", "icon": "🔁"},
+    {"id": "critic", "title": "Elite Critic", "desc": "Rate 5 or more anime with personal scores", "icon": "🌟"},
+    {"id": "polymath", "title": "Genre Polymath", "desc": "Explore 5 or more distinct anime genres", "icon": "🧭"},
+    {"id": "archivist", "title": "Archivist", "desc": "Organize your collection with custom tags", "icon": "🏷️"},
+]
+
 logger = logging.getLogger("otaku_orbit")
 _http_thread_state = threading.local()
 
@@ -134,6 +148,7 @@ def delete_owner_data(owner_id: str) -> None:
         connection = sqlite3.connect(path, timeout=15)
         try:
             connection.execute("DELETE FROM watchlist")
+            connection.execute("DELETE FROM watch_history")
             connection.commit()
             connection.execute("VACUUM")
         finally:
@@ -141,14 +156,14 @@ def delete_owner_data(owner_id: str) -> None:
 
 
 SEARCH_QUERY = """
-query ($search: String, $season: MediaSeason, $seasonYear: Int, $page: Int, $isAdult: Boolean) {
+query ($search: String, $season: MediaSeason, $seasonYear: Int, $page: Int, $isAdult: Boolean, $type: MediaType) {
   Page(page: $page, perPage: 24) {
     pageInfo { hasNextPage }
     media(search: $search, season: $season, seasonYear: $seasonYear, isAdult: $isAdult,
-          type: ANIME, sort: POPULARITY_DESC) {
+          type: $type, sort: POPULARITY_DESC) {
       id siteUrl title { romaji english native } coverImage { extraLarge large } bannerImage trailer { id site }
-      description(asHtml: false) episodes duration status
-      averageScore popularity genres season seasonYear format isAdult
+      description(asHtml: false) episodes chapters volumes duration status
+      averageScore popularity genres season seasonYear format isAdult source
       nextAiringEpisode { airingAt episode }
       studios(isMain: true) { nodes { name } }
     }
@@ -157,13 +172,22 @@ query ($search: String, $season: MediaSeason, $seasonYear: Int, $page: Int, $isA
 """
 
 DETAIL_QUERY = """
-query ($id: Int) {
-  Media(id: $id, type: ANIME) {
+query ($id: Int, $type: MediaType) {
+  Media(id: $id, type: $type) {
     id siteUrl title { romaji english native } coverImage { extraLarge large } bannerImage trailer { id site }
-    description(asHtml: false) episodes duration status averageScore genres
-    season seasonYear format isAdult nextAiringEpisode { airingAt episode }
+    description(asHtml: false) episodes chapters volumes duration status averageScore genres
+    season seasonYear format isAdult source nextAiringEpisode { airingAt episode }
     studios(isMain: true) { nodes { name } }
-    characters(sort: ROLE, perPage: 8) { nodes { name { full } } }
+    externalLinks { id site url type icon color }
+    streamingEpisodes { title thumbnail url site }
+    characters(sort: ROLE, perPage: 6) {
+      edges {
+        role
+        node { id name { full native } image { large medium } }
+        voiceActors(language: JAPANESE, sort: RELEVANCE) { id name { full native } image { large medium } languageV2 }
+      }
+      nodes { name { full } }
+    }
     staff(sort: RELEVANCE, perPage: 8) { nodes { name { full } primaryOccupations } }
     relations {
       edges {
@@ -193,11 +217,11 @@ query ($id: Int) {
 """
 
 TRENDING_QUERY = """
-query { Page(page: 1, perPage: 24) {
-  media(type: ANIME, sort: TRENDING_DESC) {
+query ($type: MediaType) { Page(page: 1, perPage: 24) {
+  media(type: $type, sort: TRENDING_DESC) {
     id siteUrl title { romaji english native } coverImage { extraLarge large } bannerImage trailer { id site }
-    description(asHtml: false) episodes duration status averageScore popularity genres
-    season seasonYear format isAdult nextAiringEpisode { airingAt episode }
+    description(asHtml: false) episodes chapters volumes duration status averageScore popularity genres
+    season seasonYear format isAdult source nextAiringEpisode { airingAt episode }
     studios(isMain: true) { nodes { name } }
   }
 } }
@@ -212,7 +236,7 @@ query ($airingAt_greater: Int, $airingAt_lesser: Int) {
       episode
       media {
         id siteUrl title { romaji english native } coverImage { extraLarge large } bannerImage trailer { id site }
-        description(asHtml: false) episodes duration status averageScore popularity genres format isAdult
+        description(asHtml: false) episodes chapters volumes duration status averageScore popularity genres format isAdult source
       }
     }
   }
@@ -231,33 +255,142 @@ def init_db(owner_id: str | None = None) -> None:
             status TEXT NOT NULL DEFAULT 'PLANNING', progress INTEGER NOT NULL DEFAULT 0,
             episodes INTEGER, duration INTEGER, score INTEGER, genres TEXT, next_airing_at INTEGER,
             next_airing_episode INTEGER, user_score INTEGER, notes TEXT, updated_at TEXT NOT NULL,
-            rewatches INTEGER NOT NULL DEFAULT 0, tags TEXT DEFAULT '', banner_image TEXT
+            rewatches INTEGER NOT NULL DEFAULT 0, tags TEXT DEFAULT '', banner_image TEXT,
+            media_type TEXT DEFAULT 'ANIME', chapters INTEGER, volumes INTEGER
         )""")
         columns = {row[1] for row in connection.execute("PRAGMA table_info(watchlist)")}
-        if "next_airing_at" not in columns:
-            connection.execute("ALTER TABLE watchlist ADD COLUMN next_airing_at INTEGER")
-        if "next_airing_episode" not in columns:
-            connection.execute("ALTER TABLE watchlist ADD COLUMN next_airing_episode INTEGER")
-        if "user_score" not in columns:
-            connection.execute("ALTER TABLE watchlist ADD COLUMN user_score INTEGER")
-        if "notes" not in columns:
-            connection.execute("ALTER TABLE watchlist ADD COLUMN notes TEXT")
-        if "duration" not in columns:
-            connection.execute("ALTER TABLE watchlist ADD COLUMN duration INTEGER")
-        if "rewatches" not in columns:
-            connection.execute("ALTER TABLE watchlist ADD COLUMN rewatches INTEGER NOT NULL DEFAULT 0")
-        if "tags" not in columns:
-            connection.execute("ALTER TABLE watchlist ADD COLUMN tags TEXT DEFAULT ''")
-        if "banner_image" not in columns:
-            connection.execute("ALTER TABLE watchlist ADD COLUMN banner_image TEXT")
+        for col_name, col_type in [
+            ("next_airing_at", "INTEGER"),
+            ("next_airing_episode", "INTEGER"),
+            ("user_score", "INTEGER"),
+            ("notes", "TEXT"),
+            ("duration", "INTEGER"),
+            ("rewatches", "INTEGER NOT NULL DEFAULT 0"),
+            ("tags", "TEXT DEFAULT ''"),
+            ("banner_image", "TEXT"),
+            ("media_type", "TEXT DEFAULT 'ANIME'"),
+            ("chapters", "INTEGER"),
+            ("volumes", "INTEGER"),
+        ]:
+            if col_name not in columns:
+                connection.execute(f"ALTER TABLE watchlist ADD COLUMN {col_name} {col_type}")  # nosec B608
         connection.execute("CREATE INDEX IF NOT EXISTS idx_watchlist_status ON watchlist(status)")
         connection.execute("CREATE INDEX IF NOT EXISTS idx_watchlist_updated ON watchlist(updated_at DESC)")
+
+        connection.execute("""CREATE TABLE IF NOT EXISTS watch_history (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            anime_id INTEGER NOT NULL,
+            title TEXT NOT NULL,
+            episode INTEGER NOT NULL,
+            watched_at TEXT NOT NULL
+        )""")
+        connection.execute("CREATE INDEX IF NOT EXISTS idx_watch_history_date ON watch_history(watched_at DESC)")
 
 
 def db_rows(owner_id: str | None = None) -> list[dict[str, Any]]:
     with sqlite3.connect(database_path_for_owner(owner_id), timeout=15) as connection:
         connection.row_factory = sqlite3.Row
         return [dict(row) for row in connection.execute("SELECT * FROM watchlist ORDER BY updated_at DESC")]
+
+
+def record_watch_history(
+    anime_id: int,
+    title: str,
+    episode: int,
+    owner_id: str | None = None,
+    watched_at: str | None = None,
+) -> None:
+    timestamp = watched_at or datetime.now().isoformat(timespec="seconds")
+    with sqlite3.connect(database_path_for_owner(owner_id), timeout=15) as connection:
+        connection.execute(
+            "INSERT INTO watch_history (anime_id, title, episode, watched_at) VALUES (?, ?, ?, ?)",
+            (anime_id, title, episode, timestamp),
+        )
+
+
+def fetch_watch_history(days: int = 60, owner_id: str | None = None) -> list[dict[str, Any]]:
+    cutoff = (date.today() - timedelta(days=days)).isoformat()
+    with sqlite3.connect(database_path_for_owner(owner_id), timeout=15) as connection:
+        connection.row_factory = sqlite3.Row
+        return [
+            dict(row)
+            for row in connection.execute(
+                "SELECT * FROM watch_history WHERE watched_at >= ? ORDER BY watched_at DESC",
+                (cutoff,),
+            )
+        ]
+
+
+def calculate_watch_streak(history: list[dict[str, Any]]) -> int:
+    if not history:
+        return 0
+    active_dates = sorted(
+        {r["watched_at"][:10] for r in history if r.get("watched_at")},
+        reverse=True,
+    )
+    if not active_dates:
+        return 0
+    today = date.today().isoformat()
+    yesterday = (date.today() - timedelta(days=1)).isoformat()
+    if active_dates[0] not in (today, yesterday):
+        return 0
+    streak = 1
+    curr = datetime.fromisoformat(active_dates[0]).date()
+    for d_str in active_dates[1:]:
+        prev = datetime.fromisoformat(d_str).date()
+        diff = (curr - prev).days
+        if diff == 1:
+            streak += 1
+            curr = prev
+        elif diff == 0:
+            continue
+        else:
+            break
+    return streak
+
+
+def calculate_watch_velocity(history: list[dict[str, Any]]) -> float:
+    if not history:
+        return 1.5
+    active_days = len({r["watched_at"][:10] for r in history if r.get("watched_at")})
+    return max(0.5, round(len(history) / max(1, active_days), 1))
+
+
+def estimate_completion_date(remaining_episodes: int, velocity: float) -> str | None:
+    if remaining_episodes <= 0 or velocity <= 0:
+        return None
+    days_needed = math.ceil(remaining_episodes / velocity)
+    target = date.today() + timedelta(days=days_needed)
+    return target.strftime("%d %b %Y")
+
+
+def evaluate_achievements(rows: list[dict[str, Any]], history: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    total_eps = sum(r.get("progress", 0) for r in rows)
+    completed_count = sum(r.get("status") == "COMPLETED" for r in rows)
+    rewatch_count = sum((r.get("rewatches") or 0) > 0 or r.get("status") == "REWATCHING" for r in rows)
+    rated_count = sum(bool(r.get("user_score")) for r in rows)
+    distinct_genres = len({g.strip() for r in rows for g in (r.get("genres") or "").split(",") if g.strip()})
+    tagged_count = sum(bool((r.get("tags") or "").strip()) for r in rows)
+
+    counts_by_day: dict[str, int] = {}
+    for h in history:
+        day = h.get("watched_at", "")[:10]
+        if day:
+            counts_by_day[day] = counts_by_day.get(day, 0) + 1
+    max_day_eps = max(counts_by_day.values()) if counts_by_day else 0
+
+    status_map = {
+        "first_step": len(rows) >= 1,
+        "rookie": completed_count >= 1,
+        "centurion": total_eps >= 100,
+        "binge_demon": max_day_eps >= 5,
+        "time_leaper": rewatch_count >= 1,
+        "critic": rated_count >= 5,
+        "polymath": distinct_genres >= 5,
+        "archivist": tagged_count >= 1,
+    }
+
+    return [{**ach, "unlocked": status_map.get(ach["id"], False)} for ach in ACHIEVEMENTS]
 
 
 def cover_image_url(anime: dict[str, Any]) -> str | None:
@@ -292,7 +425,8 @@ def validate_watchlist_state(
     user_score: int | None = None,
     rewatches: int = 0,
 ) -> None:
-    if status not in WATCH_STATUSES:
+    valid_statuses = set(WATCH_STATUSES).union(MANGA_STATUSES)
+    if status not in valid_statuses:
         raise ValueError("Choose a valid watch status.")
     if progress < 0 or (episodes is not None and episodes > 0 and progress > episodes):
         raise ValueError("Episode progress must be between zero and the known episode count.")
@@ -309,21 +443,24 @@ def save_anime(
     owner_id: str | None = None,
     rewatches: int = 0,
     tags: str = "",
+    media_type: str = "ANIME",
 ) -> None:
     title = display_title(anime)
-    episodes = anime.get("episodes")
+    episodes = anime.get("episodes") or anime.get("chapters")
     validate_watchlist_state(progress, status, episodes, rewatches=rewatches)
     with sqlite3.connect(database_path_for_owner(owner_id), timeout=15) as connection:
         connection.execute(
             """INSERT INTO watchlist
             (anime_id, title, image, status, progress, episodes, duration, score, genres,
-             next_airing_at, next_airing_episode, rewatches, tags, banner_image, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             next_airing_at, next_airing_episode, rewatches, tags, banner_image, media_type,
+             chapters, volumes, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(anime_id) DO UPDATE SET title=excluded.title, image=excluded.image,
             status=excluded.status, progress=excluded.progress, episodes=excluded.episodes, duration=excluded.duration,
             score=excluded.score, genres=excluded.genres, next_airing_at=excluded.next_airing_at,
             next_airing_episode=excluded.next_airing_episode, rewatches=excluded.rewatches, tags=excluded.tags,
-            banner_image=excluded.banner_image, updated_at=excluded.updated_at""",
+            banner_image=excluded.banner_image, media_type=excluded.media_type, chapters=excluded.chapters,
+            volumes=excluded.volumes, updated_at=excluded.updated_at""",
             (
                 anime["id"],
                 title,
@@ -339,6 +476,9 @@ def save_anime(
                 rewatches,
                 tags,
                 banner_image_url(anime),
+                media_type,
+                anime.get("chapters"),
+                anime.get("volumes"),
                 datetime.now().isoformat(timespec="seconds"),
             ),
         )
@@ -355,10 +495,14 @@ def update_progress(
     owner_id: str | None = None,
 ) -> None:
     with sqlite3.connect(database_path_for_owner(owner_id), timeout=15) as connection:
-        row = connection.execute("SELECT episodes, rewatches FROM watchlist WHERE anime_id=?", (anime_id,)).fetchone()
+        row = connection.execute(
+            "SELECT episodes, rewatches, progress, title FROM watchlist WHERE anime_id=?", (anime_id,)
+        ).fetchone()
         if row is None:
             raise ValueError(f"Anime ID {anime_id} not found in watchlist.")
         current_rewatches = row[1] if row[1] is not None else 0
+        old_progress = row[2] if row[2] is not None else 0
+        title = row[3] or "Anime"
         validate_watchlist_state(
             progress, status, row[0], user_score, rewatches=rewatches if rewatches is not None else current_rewatches
         )
@@ -366,8 +510,9 @@ def update_progress(
             raise ValueError("Notes must be 5,000 characters or fewer.")
         if tags is not None and len(tags) > 500:
             raise ValueError("Tags must be 500 characters or fewer.")
+        now_ts = datetime.now().isoformat(timespec="seconds")
         set_clauses = ["progress=?", "status=?", "notes=coalesce(?, notes)", "updated_at=?"]
-        params: list[Any] = [progress, status, notes, datetime.now().isoformat(timespec="seconds")]
+        params: list[Any] = [progress, status, notes, now_ts]
         if user_score is not None:
             set_clauses.append("user_score=?")
             params.append(user_score)
@@ -379,6 +524,12 @@ def update_progress(
             params.append(tags)
         params.append(anime_id)
         connection.execute(f"UPDATE watchlist SET {', '.join(set_clauses)} WHERE anime_id=?", params)  # nosec B608
+
+        if progress > old_progress:
+            connection.execute(
+                "INSERT INTO watch_history (anime_id, title, episode, watched_at) VALUES (?, ?, ?, ?)",
+                (anime_id, title, progress, now_ts),
+            )
 
 
 def batch_update_status(anime_ids: list[int], status: str, owner_id: str | None = None) -> None:
@@ -427,7 +578,7 @@ def increment_watchlist_progress(anime_id: int, owner_id: str | None = None) -> 
     with sqlite3.connect(database_path_for_owner(owner_id), timeout=15) as connection:
         connection.row_factory = sqlite3.Row
         row = connection.execute(
-            "SELECT progress, episodes, status FROM watchlist WHERE anime_id=?", (anime_id,)
+            "SELECT progress, episodes, status, title FROM watchlist WHERE anime_id=?", (anime_id,)
         ).fetchone()
         if not row:
             raise ValueError(f"Anime ID {anime_id} not found in watchlist.")
@@ -439,9 +590,14 @@ def increment_watchlist_progress(anime_id: int, owner_id: str | None = None) -> 
             status = "COMPLETED"
         elif status == "PLANNING":
             status = "WATCHING"
+        now_ts = datetime.now().isoformat(timespec="seconds")
         connection.execute(
             "UPDATE watchlist SET progress=?, status=?, updated_at=? WHERE anime_id=?",
-            (progress, status, datetime.now().isoformat(timespec="seconds"), anime_id),
+            (progress, status, now_ts, anime_id),
+        )
+        connection.execute(
+            "INSERT INTO watch_history (anime_id, title, episode, watched_at) VALUES (?, ?, ?, ?)",
+            (anime_id, row["title"], progress, now_ts),
         )
         return progress, status
 
@@ -539,6 +695,210 @@ def export_watchlist_mal_xml(rows: list[dict[str, Any]]) -> str:
         xml_parts.append("  </anime>")
     xml_parts.append("</myanimelist>")
     return "\n".join(xml_parts)
+
+
+def generate_airing_ics(rows: list[dict[str, Any]]) -> str:
+    """Generate RFC 5545 iCalendar data for upcoming airing episodes in watchlist."""
+    lines = [
+        "BEGIN:VCALENDAR",
+        "VERSION:2.0",
+        "PRODID:-//Otaku Orbit//Anime Airing Schedule//EN",
+        "CALSCALE:GREGORIAN",
+        "METHOD:PUBLISH",
+        "X-WR-CALNAME:Otaku Orbit Airing Schedule",
+    ]
+    now_utc = datetime.now(ZoneInfo("UTC")).strftime("%Y%m%dT%H%M%SZ")
+    for row in rows:
+        airing_at = row.get("next_airing_at")
+        if not airing_at or airing_at <= 0:
+            continue
+        episode = row.get("next_airing_episode", 1)
+        title = row.get("title", "Anime")
+        dt_start = datetime.fromtimestamp(airing_at, ZoneInfo("UTC")).strftime("%Y%m%dT%H%M%SZ")
+        duration_min = row.get("duration") or 24
+        dt_end = datetime.fromtimestamp(airing_at + duration_min * 60, ZoneInfo("UTC")).strftime("%Y%m%dT%H%M%SZ")
+        uid = f"otaku-orbit-{row.get('anime_id', 0)}-ep{episode}-{airing_at}@otaku-orbit"
+        lines.extend(
+            [
+                "BEGIN:VEVENT",
+                f"UID:{uid}",
+                f"DTSTAMP:{now_utc}",
+                f"DTSTART:{dt_start}",
+                f"DTEND:{dt_end}",
+                f"SUMMARY:{title} - Episode {episode}",
+                f"DESCRIPTION:Broadcast of {title} Episode {episode}.",
+                "STATUS:CONFIRMED",
+                "END:VEVENT",
+            ]
+        )
+    lines.append("END:VCALENDAR")
+    return "\r\n".join(lines)
+
+
+def get_next_airing_countdown(rows: list[dict[str, Any]]) -> dict[str, Any] | None:
+    now = int(time.time())
+    airing_candidates = []
+    for row in rows:
+        airing_at = row.get("next_airing_at")
+        if airing_at and airing_at > now and (airing_at - now) <= 172800:
+            airing_candidates.append((airing_at, row))
+    if not airing_candidates:
+        return None
+    airing_candidates.sort(key=lambda x: x[0])
+    closest_ts, anime_row = airing_candidates[0]
+    diff_seconds = closest_ts - now
+    hours, rem = divmod(diff_seconds, 3600)
+    minutes = rem // 60
+    return {
+        "title": anime_row.get("title"),
+        "episode": anime_row.get("next_airing_episode"),
+        "airing_at": closest_ts,
+        "hours": hours,
+        "minutes": minutes,
+    }
+
+
+def extract_streaming_links(anime: dict[str, Any]) -> list[dict[str, Any]]:
+    links = []
+    seen = set()
+    streaming_sites = {
+        "crunchyroll",
+        "netflix",
+        "hulu",
+        "hidive",
+        "disney+",
+        "amazon",
+        "prime video",
+        "bilibili",
+        "youtube",
+        "funimation",
+        "vrv",
+    }
+    for item in anime.get("externalLinks", []):
+        site = item.get("site", "")
+        url = item.get("url", "")
+        l_type = item.get("type", "")
+        if url and (site.lower() in streaming_sites or l_type == "STREAMING") and url not in seen:
+            seen.add(url)
+            links.append({"site": site, "url": url, "color": item.get("color")})
+    for ep in anime.get("streamingEpisodes", []):
+        site = ep.get("site") or "Watch Online"
+        url = ep.get("url", "")
+        if url and url not in seen:
+            seen.add(url)
+            links.append({"site": site, "url": url, "color": None})
+    return links
+
+
+def extract_characters_and_seiyuu(anime: dict[str, Any]) -> list[dict[str, Any]]:
+    results = []
+    char_data = anime.get("characters", {})
+    for edge in char_data.get("edges", []):
+        node = edge.get("node")
+        if not node:
+            continue
+        c_name = node.get("name", {}).get("full") or "Unknown"
+        c_native = node.get("name", {}).get("native") or ""
+        c_img = (node.get("image") or {}).get("large") or (node.get("image") or {}).get("medium")
+        role = (edge.get("role") or "MAIN").replace("_", " ").title()
+        vas = edge.get("voiceActors", [])
+        va = vas[0] if vas else None
+        va_name = va.get("name", {}).get("full") if va else None
+        va_img = (
+            (va.get("image") or {}).get("large")
+            if va and is_safe_cover_url((va.get("image") or {}).get("large"))
+            else None
+        )
+        results.append(
+            {
+                "character": c_name,
+                "character_native": c_native,
+                "char_img": c_img if is_safe_cover_url(c_img) else None,
+                "role": role,
+                "seiyuu": va_name,
+                "seiyuu_img": va_img,
+            }
+        )
+    return results
+
+
+def generate_music_links(title: str) -> dict[str, str]:
+    q_op = quote(f"{title} anime opening theme")
+    q_ed = quote(f"{title} anime ending theme")
+    q_ost = quote(f"{title} original soundtrack")
+    return {
+        "Spotify OP": f"https://open.spotify.com/search/{q_op}",
+        "Spotify ED": f"https://open.spotify.com/search/{q_ed}",
+        "YouTube Music": f"https://music.youtube.com/search?q={q_ost}",
+    }
+
+
+ANILIST_STATUS_MAP = {
+    "CURRENT": "WATCHING",
+    "COMPLETED": "COMPLETED",
+    "PLANNING": "PLANNING",
+    "DROPPED": "DROPPED",
+    "PAUSED": "PAUSED",
+    "REPEATING": "REWATCHING",
+}
+
+
+def sync_anilist_profile(username: str, media_type: str = "ANIME", owner_id: str | None = None) -> int:
+    query = """
+    query ($userName: String, $type: MediaType) {
+      MediaListCollection(userName: $userName, type: $type) {
+        lists {
+          entries {
+            status
+            progress
+            score(format: POINT_100)
+            repeat
+            notes
+            media {
+              id
+              siteUrl
+              title { romaji english native }
+              coverImage { extraLarge large }
+              bannerImage
+              episodes
+              duration
+              averageScore
+              genres
+              nextAiringEpisode { airingAt episode }
+            }
+          }
+        }
+      }
+    }
+    """
+    data = anilist_response(query, {"userName": username, "type": media_type})
+    collection = data.get("MediaListCollection", {})
+    lists = collection.get("lists", [])
+    synced = 0
+    for lst in lists:
+        for entry in lst.get("entries", []):
+            media = entry.get("media")
+            if not media:
+                continue
+            anilist_status = entry.get("status", "PLANNING")
+            status = ANILIST_STATUS_MAP.get(anilist_status, "PLANNING")
+            progress = entry.get("progress") or 0
+            score = entry.get("score")
+            repeat = entry.get("repeat") or 0
+            notes = entry.get("notes") or ""
+            save_anime(media, status=status, progress=progress, owner_id=owner_id, rewatches=repeat)
+            if score or notes:
+                update_progress(
+                    media["id"],
+                    progress,
+                    status,
+                    user_score=int(score) if score else None,
+                    notes=notes,
+                    rewatches=repeat,
+                    owner_id=owner_id,
+                )
+            synced += 1
+    return synced
 
 
 def validate_backup_row(row: Any, index: int) -> dict[str, Any]:
@@ -741,8 +1101,8 @@ def anilist_query(query: str, variables: dict[str, Any] | None = None) -> list[d
 
 
 @st.cache_data(ttl=3600, show_spinner=False)
-def fetch_anime_detail(anime_id: int) -> dict[str, Any] | None:
-    payload = anilist_query(DETAIL_QUERY, {"id": anime_id})
+def fetch_anime_detail(anime_id: int, media_type: str = "ANIME") -> dict[str, Any] | None:
+    payload = anilist_query(DETAIL_QUERY, {"id": anime_id, "type": media_type})
     return payload[0] if payload else None
 
 
@@ -762,19 +1122,30 @@ def current_season_and_year(today: date | None = None) -> tuple[str, int]:
 
 
 def fetch_anime(
-    search: str = "", season: str | None = None, year: int | None = None, page: int = 1, is_adult: bool | None = False
+    search: str = "",
+    season: str | None = None,
+    year: int | None = None,
+    page: int = 1,
+    is_adult: bool | None = False,
+    media_type: str = "ANIME",
 ) -> list[dict[str, Any]]:
-    results, _ = fetch_anime_page(search, season, year, page, is_adult=is_adult)
+    results, _ = fetch_anime_page(search, season, year, page, is_adult=is_adult, media_type=media_type)
     return results
 
 
 def fetch_anime_page(
-    search: str = "", season: str | None = None, year: int | None = None, page: int = 1, is_adult: bool | None = False
+    search: str = "",
+    season: str | None = None,
+    year: int | None = None,
+    page: int = 1,
+    is_adult: bool | None = False,
+    media_type: str = "ANIME",
 ) -> tuple[list[dict[str, Any]], bool]:
     variables: dict[str, Any] = {
         "search": search or None,
         "page": page,
         "isAdult": is_adult if is_adult is not None else False,
+        "type": media_type,
     }
     if season:
         variables["season"], variables["seasonYear"] = season, year
@@ -821,6 +1192,8 @@ def filter_anime(
     format_name: str = "All formats",
     minimum_score: int = 0,
     include_adult: bool = False,
+    source: str = "All sources",
+    studio: str = "All studios",
 ) -> list[dict[str, Any]]:
     filtered = []
     for anime in results:
@@ -832,6 +1205,12 @@ def filter_anime(
             continue
         if (anime.get("averageScore") or 0) < minimum_score:
             continue
+        if source != "All sources" and anime.get("source") != source:
+            continue
+        if studio != "All studios":
+            studios = [s.get("name") for s in anime.get("studios", {}).get("nodes", []) if s.get("name")]
+            if studio not in studios:
+                continue
         filtered.append(anime)
     return filtered
 
@@ -839,13 +1218,29 @@ def filter_anime(
 def render_filters(results: list[dict[str, Any]], key_prefix: str) -> list[dict[str, Any]]:
     genres = sorted({genre for anime in results for genre in anime.get("genres", [])})
     formats = sorted({anime.get("format") for anime in results if anime.get("format")})
+    sources = sorted({anime.get("source") for anime in results if anime.get("source")})
+    studios = sorted(
+        {s["name"] for anime in results for s in anime.get("studios", {}).get("nodes", []) if s.get("name")}
+    )
     with st.expander("Filter results", expanded=False):
-        first, second, third, fourth = st.columns(4)
-        genre = first.selectbox("Genre", ["All genres", *genres], key=f"genre-{key_prefix}")
-        format_name = second.selectbox("Format", ["All formats", *formats], key=f"format-{key_prefix}")
-        minimum_score = third.slider("Minimum score", 0, 90, 0, 5, key=f"score-{key_prefix}")
-        include_adult = fourth.checkbox("Include mature titles", key=f"adult-{key_prefix}")
-    filtered = filter_anime(results, genre, format_name, minimum_score, include_adult)
+        c1, c2, c3 = st.columns(3)
+        genre = c1.selectbox("Genre", ["All genres", *genres], key=f"genre-{key_prefix}")
+        format_name = c2.selectbox("Format", ["All formats", *formats], key=f"format-{key_prefix}")
+        source_val = c3.selectbox("Source Material", ["All sources", *sources], key=f"source-{key_prefix}")
+
+        c4, c5, c6 = st.columns(3)
+        studio_val = c4.selectbox("Studio", ["All studios", *studios], key=f"studio-{key_prefix}")
+        minimum_score = c5.slider("Minimum score", 0, 90, 0, 5, key=f"score-{key_prefix}")
+        include_adult = c6.checkbox("Include mature titles", key=f"adult-{key_prefix}")
+    filtered = filter_anime(
+        results,
+        genre,
+        format_name,
+        minimum_score,
+        include_adult,
+        source=source_val,
+        studio=studio_val,
+    )
     st.caption(f"Showing {len(filtered)} of {len(results)} titles")
     return filtered
 
@@ -966,8 +1361,9 @@ def fetch_airing_schedule(start_timestamp: int, end_timestamp: int) -> list[dict
 
 @st.dialog("Anime details")
 def show_anime_details(anime_id: int) -> None:
+    media_type = st.session_state.get("global_media_type", "ANIME")
     try:
-        anime = fetch_anime_detail(anime_id)
+        anime = fetch_anime_detail(anime_id, media_type=media_type)
     except (requests.RequestException, RuntimeError) as error:
         st.error(f"Could not load details: {error}")
         return
@@ -986,23 +1382,50 @@ def show_anime_details(anime_id: int) -> None:
             st.image(cover_url, caption=f"Cover art for {title}", use_container_width=True)
     with info_col:
         score = anime.get("averageScore")
+        source = anime.get("source") or "Original"
         st.caption(
-            f"**Format:** {anime.get('format', 'ANIME')} · **Status:** {anime.get('status', 'UNKNOWN')} · **Score:** {score or '—'}/100"
+            f"**Format:** {anime.get('format', 'ANIME')} · **Status:** {anime.get('status', 'UNKNOWN')} · **Score:** {score or '—'}/100 · **Source:** {source}"
         )
         st.write(clean_description(anime.get("description")))
-        st.write(
-            f"**Episodes:** {anime.get('episodes') or 'Unknown'} · **Duration:** {anime.get('duration') or 'Unknown'} min"
-        )
+        ep_count = anime.get("episodes") or anime.get("chapters")
+        count_label = "Episodes" if media_type == "ANIME" else "Chapters"
+        st.write(f"**{count_label}:** {ep_count or 'Unknown'} · **Duration:** {anime.get('duration') or 'Unknown'} min")
         st.caption(f"Estimated watch time: {calculate_runtime_display(anime.get('episodes'), anime.get('duration'))}")
-        studios = [studio["name"] for studio in anime.get("studios", {}).get("nodes", [])]
+        studios = [studio["name"] for studio in anime.get("studios", {}).get("nodes", []) if studio.get("name")]
         if studios:
             st.write("**Studio:** " + ", ".join(studios))
-    characters = [item["name"]["full"] for item in anime.get("characters", {}).get("nodes", [])]
-    if characters:
-        st.caption("**Main Characters:** " + ", ".join(characters))
-    staff = [item["name"]["full"] for item in anime.get("staff", {}).get("nodes", [])]
-    if staff:
-        st.caption("**Key Staff:** " + ", ".join(staff))
+
+    characters_and_seiyuu = extract_characters_and_seiyuu(anime)
+    if characters_and_seiyuu:
+        st.divider()
+        st.subheader("Characters & Voice Cast (Seiyuu)")
+        cast_cols = st.columns(min(len(characters_and_seiyuu[:4]), 4))
+        for col, item in zip(cast_cols, characters_and_seiyuu[:4]):
+            with col:
+                with st.container(border=True):
+                    if item.get("char_img"):
+                        st.image(item["char_img"], use_container_width=True)
+                    st.markdown(f"**{item['character']}**")
+                    st.caption(f"Role: {item['role']}")
+                    if item.get("seiyuu"):
+                        st.caption(f"🎙️ VA: {item['seiyuu']}")
+
+    streaming_links = extract_streaming_links(anime)
+    if streaming_links:
+        st.divider()
+        st.subheader("Where to Stream Legally")
+        stream_cols = st.columns(min(len(streaming_links[:4]), 4))
+        for col, s_link in zip(stream_cols, streaming_links[:4]):
+            col.link_button(f"▶ {s_link['site']}", s_link["url"], use_container_width=True)
+
+    music_links = generate_music_links(title)
+    st.divider()
+    st.subheader("OST & Theme Songs")
+    m_col1, m_col2, m_col3 = st.columns(3)
+    m_col1.link_button("🎵 Opening on Spotify", music_links["Spotify OP"], use_container_width=True)
+    m_col2.link_button("🎵 Ending on Spotify", music_links["Spotify ED"], use_container_width=True)
+    m_col3.link_button("▶️ YouTube Music OST", music_links["YouTube Music"], use_container_width=True)
+
     relations = [
         edge for edge in anime.get("relations", {}).get("edges", []) if edge.get("node") and edge.get("relationType")
     ]
@@ -1018,6 +1441,7 @@ def show_anime_details(anime_id: int) -> None:
                 if rel_cover:
                     st.image(rel_cover, use_container_width=True)
                 st.caption(f"**{rel_type}**\n{display_title(rel_node)}")
+
     recs = [
         node.get("mediaRecommendation")
         for node in anime.get("recommendations", {}).get("nodes", [])
@@ -1034,6 +1458,7 @@ def show_anime_details(anime_id: int) -> None:
                     st.image(rec_cover, use_container_width=True)
                 rec_score = f"★ {rec.get('averageScore')}" if rec.get("averageScore") else ""
                 st.caption(f"{display_title(rec)} {rec_score}")
+
     site_url = anime.get("siteUrl") or f"https://anilist.co/anime/{anime_id}"
     trailer_url = format_trailer_url(anime.get("trailer"))
     btn_cols = st.columns(2 if trailer_url else 1)
@@ -1053,7 +1478,10 @@ def render_card(anime: dict[str, Any], saved_ids: set[int], key_prefix: str, own
     with details:
         st.subheader(title)
         score = anime.get("averageScore")
-        meta = f"{anime.get('format', 'ANIME')}  ·  {anime.get('status', 'UNKNOWN')}  ·  {score or '—'}/100"
+        source = anime.get("source") or "Original"
+        meta = (
+            f"{anime.get('format', 'ANIME')}  ·  {anime.get('status', 'UNKNOWN')}  ·  {score or '—'}/100  ·  {source}"
+        )
         st.caption(meta)
         st.write(clean_description(anime.get("description"))[:420] + "…")
         genres = anime.get("genres", [])
@@ -1089,7 +1517,7 @@ def render_poster_grid(
     columns_per_row: int = 4,
 ) -> None:
     if not results:
-        st.info("No anime matches the current filters.")
+        st.info("No titles match the current filters.")
         return
     for i in range(0, len(results), columns_per_row):
         cols = st.columns(columns_per_row)
@@ -1116,13 +1544,23 @@ def render_poster_grid(
                             st.rerun()
 
 
-def render_airing_calendar(saved_ids: set[int], owner_id: str | None = None) -> None:
+def render_airing_calendar(rows: list[dict[str, Any]], saved_ids: set[int], owner_id: str | None = None) -> None:
     st.title("Airing Calendar")
     st.caption("Track new anime episodes releasing this week in your timezone.")
     timezone_name = st.session_state.get("display_timezone", "Asia/Kolkata")
     now_ts = int(time.time())
     start_ts = now_ts - 7200
     end_ts = now_ts + 7 * 86400
+
+    ics_content = generate_airing_ics(rows)
+    st.download_button(
+        "📅 Export Airing Schedule (.ics)",
+        ics_content,
+        "otaku_orbit_airing.ics",
+        "text/calendar",
+        help="Subscribe in Apple Calendar, Google Calendar, or Outlook",
+    )
+
     if offline_mode_enabled():
         st.info("Offline mode is enabled; airing schedule requests are disabled.")
         return
@@ -1192,9 +1630,159 @@ def render_airing_calendar(saved_ids: set[int], owner_id: str | None = None) -> 
         st.divider()
 
 
+def render_tier_list_maker(rows: list[dict[str, Any]]) -> None:
+    st.subheader("Tier List Maker")
+    st.caption("Organize your collection into S, A, B, C, and D tiers based on your ratings.")
+    tiers: dict[str, list[dict[str, Any]]] = {
+        "S Tier (Masterpiece)": [],
+        "A Tier (Great)": [],
+        "B Tier (Good)": [],
+        "C Tier (Average)": [],
+        "D Tier (Disappointing)": [],
+    }
+    for row in rows:
+        score = row.get("user_score")
+        if score is not None and score >= 90:
+            tiers["S Tier (Masterpiece)"].append(row)
+        elif score is not None and score >= 80:
+            tiers["A Tier (Great)"].append(row)
+        elif score is not None and score >= 70:
+            tiers["B Tier (Good)"].append(row)
+        elif score is not None and score >= 50:
+            tiers["C Tier (Average)"].append(row)
+        elif score is not None and score > 0:
+            tiers["D Tier (Disappointing)"].append(row)
+        else:
+            tiers["B Tier (Good)"].append(row)
+
+    tier_colors = {
+        "S Tier (Masterpiece)": "#ff7f7f",
+        "A Tier (Great)": "#ffbf7f",
+        "B Tier (Good)": "#ffff7f",
+        "C Tier (Average)": "#7fff7f",
+        "D Tier (Disappointing)": "#7fbfff",
+    }
+    for tier_name, tier_items in tiers.items():
+        color = tier_colors[tier_name]
+        st.markdown(
+            f'<div style="background:{color}; color:#111; font-weight:bold; padding:6px 14px; border-radius:8px; margin:10px 0 6px;">{tier_name} ({len(tier_items)})</div>',
+            unsafe_allow_html=True,
+        )
+        if tier_items:
+            t_cols = st.columns(min(len(tier_items), 6))
+            for col, item in zip(t_cols, tier_items[:6]):
+                with col:
+                    img = item.get("image")
+                    if img:
+                        st.image(img, use_container_width=True)
+                    st.caption(item.get("title", "")[:24])
+        else:
+            st.caption("No titles placed in this tier.")
+
+
+def render_analytics(rows: list[dict[str, Any]], owner_id: str | None = None) -> None:
+    st.title("Analytics & Insights")
+    st.caption("Deep dive into your viewing journey, habits, achievements, and pacing.")
+    if not rows:
+        st.info("Add titles to your watchlist to unlock viewing analytics.")
+        return
+    history = fetch_watch_history(days=60, owner_id=owner_id)
+    completed_episodes = sum(row.get("progress", 0) for row in rows)
+    watched_minutes = sum(
+        min(row.get("progress", 0), row.get("episodes") or row.get("progress", 0)) * (row.get("duration") or 24)
+        for row in rows
+    )
+    streak = calculate_watch_streak(history)
+    velocity = calculate_watch_velocity(history)
+    rated_rows = [r for r in rows if r.get("user_score")]
+    avg_user_score = round(sum(r["user_score"] for r in rated_rows) / len(rated_rows), 1) if rated_rows else 0.0
+
+    c1, c2, c3, c4, c5 = st.columns(5)
+    c1.metric("Titles Tracked", len(rows))
+    c2.metric("Episodes Logged", completed_episodes)
+    c3.metric("Time Watched", f"{watched_minutes // 60}h")
+    c4.metric("Active Streak", f"{streak} day{'s' if streak != 1 else ''}", delta="🔥")
+    c5.metric("Watching Pace", f"{velocity} eps/day")
+
+    st.divider()
+
+    active_watching = [r for r in rows if r.get("status") in {"WATCHING", "REWATCHING"} and r.get("episodes")]
+    if active_watching:
+        st.subheader("Completion Forecast")
+        st.caption(f"Based on your current velocity (~{velocity} eps/day):")
+        f_cols = st.columns(min(len(active_watching[:3]), 3))
+        for col, row in zip(f_cols, active_watching[:3]):
+            rem_eps = max(row["episodes"] - row["progress"], 0)
+            est_date = estimate_completion_date(rem_eps, velocity)
+            with col:
+                with st.container(border=True):
+                    st.markdown(f"**{row['title']}**")
+                    st.caption(f"Progress: {row['progress']}/{row['episodes']} ({rem_eps} left)")
+                    st.write(f"🎯 Est. Finish: **{est_date or 'Complete!'}**" if est_date else "Complete!")
+        st.divider()
+
+    if rated_rows:
+        st.subheader("Rating Distribution")
+        score_bins = {f"{i * 10}-{(i + 1) * 10}": 0 for i in range(1, 10)}
+        score_bins["90-100"] = 0
+        for r in rated_rows:
+            s = r["user_score"]
+            if s >= 90:
+                score_bins["90-100"] += 1
+            else:
+                b_key = f"{(s // 10) * 10}-{(s // 10 + 1) * 10}"
+                if b_key in score_bins:
+                    score_bins[b_key] += 1
+        st.bar_chart(score_bins)
+        st.caption(f"Mean personal score: **{avg_user_score}/100** across {len(rated_rows)} rated titles.")
+        st.divider()
+
+    genre_counts: dict[str, int] = {}
+    for row in rows:
+        for genre in filter(None, (row.get("genres") or "").split(", ")):
+            genre_counts[genre] = genre_counts.get(genre, 0) + 1
+    if genre_counts:
+        st.subheader("Genre Profile")
+        st.bar_chart(dict(sorted(genre_counts.items(), key=lambda item: item[1], reverse=True)[:10]))
+        st.divider()
+
+    st.subheader("Viewing Activity Log (Recent 30 Days)")
+    if history:
+        day_counts: dict[str, int] = {}
+        for h in history:
+            day = h.get("watched_at", "")[:10]
+            if day:
+                day_counts[day] = day_counts.get(day, 0) + 1
+        recent_30_days = [(date.today() - timedelta(days=i)).isoformat() for i in range(29, -1, -1)]
+        heatmap_data = {d: day_counts.get(d, 0) for d in recent_30_days}
+        st.bar_chart(heatmap_data)
+    else:
+        st.info("Watch history will record daily as you log progress with +1 Ep.")
+    st.divider()
+
+    st.subheader("Achievements & Milestones")
+    achievements = evaluate_achievements(rows, history)
+    cols_per_row = 4
+    for i in range(0, len(achievements), cols_per_row):
+        b_cols = st.columns(cols_per_row)
+        for col, ach in zip(b_cols, achievements[i : i + cols_per_row]):
+            with col:
+                with st.container(border=True):
+                    badge_status = "✨ Unlocked" if ach["unlocked"] else "🔒 Locked"
+                    st.markdown(f"### {ach['icon']} {ach['title']}")
+                    st.caption(ach["desc"])
+                    if ach["unlocked"]:
+                        st.success(badge_status)
+                    else:
+                        st.caption(badge_status)
+    st.divider()
+
+    render_tier_list_maker(rows)
+
+
 def render_watchlist(owner_id: str | None = None) -> None:
     rows = db_rows(owner_id)
-    st.title("Your watchlist")
+    st.title("Your library")
     if not rows:
         st.info("Your watchlist is empty. Discover something new from the sidebar.")
         return
@@ -1277,19 +1865,26 @@ def render_watchlist(owner_id: str | None = None) -> None:
     st.subheader("All saved titles")
     all_tags = sorted({t.strip() for r in rows for t in (r.get("tags") or "").split(",") if t.strip()})
     f_col1, f_col2, f_col3 = st.columns(3)
-    search = f_col1.text_input("Filter your watchlist", placeholder="Search saved titles…")
+    search = f_col1.text_input("🔍 Quick filter watchlist", placeholder="Filter by title, tag, or notes…")
     status_filter = f_col2.selectbox("Status", ["All statuses", *WATCH_STATUSES])
     tag_filter = f_col3.selectbox("Tag", ["All tags", *all_tags] if all_tags else ["All tags"])
     visible_rows = [
         row
         for row in rows
-        if (not search or search.lower() in row["title"].lower())
+        if (
+            not search
+            or search.lower() in row["title"].lower()
+            or search.lower() in (row.get("tags") or "").lower()
+            or search.lower() in (row.get("notes") or "").lower()
+            or search.lower() in (row.get("genres") or "").lower()
+        )
         and (status_filter == "All statuses" or row["status"] == status_filter)
         and (
             tag_filter == "All tags"
             or tag_filter in [t.strip() for t in (row.get("tags") or "").split(",") if t.strip()]
         )
     ]
+    st.caption(f"Showing {len(visible_rows)} of {len(rows)} titles")
     for row in visible_rows:
         left, right = st.columns([3, 2])
         with left:
@@ -1456,6 +2051,48 @@ def render_recommendations(rows: list[dict[str, Any]], saved_ids: set[int], owne
             render_card(anime, saved_ids, "recommendation", owner_id)
 
 
+def render_settings(owner_id: str | None = None) -> None:
+    st.title("Settings & Integrations")
+    st.caption("Configure personal preferences, theme presets, integrations, and mobile settings.")
+
+    with st.expander("AniList 1-Click Library Synchronization", expanded=True):
+        st.caption("Import your public library directly from AniList into your Otaku Orbit database.")
+        anilist_user = st.text_input("AniList Username", placeholder="e.g. ShashankS1011")
+        sync_type = st.radio("Sync Media", ["ANIME", "MANGA"], horizontal=True, key="sync_media_type")
+        if st.button("Synchronize Library", type="primary") and anilist_user.strip():
+            with st.spinner("Fetching AniList library..."):
+                try:
+                    count = sync_anilist_profile(anilist_user.strip(), sync_type, owner_id)
+                    st.success(f"Synchronized {count} title(s) from AniList.")
+                    st.rerun()
+                except Exception as error:
+                    st.error(f"Synchronization failed: {error}")
+
+    with st.expander("Progressive Web App (PWA) & Offline Setup"):
+        st.caption("Install Otaku Orbit directly to your phone or desktop home screen:")
+        st.markdown("""
+        - **Android (Chrome/Edge):** Tap the browser menu `⋮` and select **'Add to Home screen'** or **'Install app'**.
+        - **iOS (Safari):** Tap the Share button `⎋` and tap **'Add to Home Screen'** `[+]`.
+        - **Desktop (Chrome/Edge):** Click the install icon in the address bar to run as a dedicated desktop app.
+        """)
+
+    with st.expander("Privacy Controls & Data Management"):
+        st.caption("Permanently delete this account's watchlist and viewing history.")
+        if st.button("Delete my data", key="settings-del-data"):
+            st.session_state["confirm_delete_owner_data"] = True
+        if st.session_state.get("confirm_delete_owner_data"):
+            st.warning("This action cannot be undone. All saved titles, history, and notes will be wiped.")
+            c1, c2 = st.columns(2)
+            if c1.button("Confirm Wiping Data", key="conf-wipe-btn"):
+                delete_owner_data(owner_id)
+                st.session_state.pop("confirm_delete_owner_data", None)
+                st.success("Your data has been wiped.")
+                st.rerun()
+            if c2.button("Cancel", key="canc-wipe-btn"):
+                st.session_state.pop("confirm_delete_owner_data", None)
+                st.rerun()
+
+
 def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
     st.set_page_config(page_title=APP_NAME, page_icon="O", layout="wide", initial_sidebar_state="expanded")
@@ -1490,11 +2127,18 @@ def main() -> None:
         .orbit-hero h1 {{font-size: 2rem; line-height: 1.1;}}
         .orbit-credit {{font-size: .68rem; padding: 0 .5rem;}}
     }}
-    </style>""",
+    </style>
+    <link rel="manifest" href="manifest.json">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="theme-color" content="{theme["primary"]}">
+    <meta name="application-name" content="Otaku Orbit">
+    """,
         unsafe_allow_html=True,
     )
     rows = db_rows(owner_id)
     saved_ids = {row["anime_id"] for row in rows}
+
     with st.sidebar:
         st.markdown("# Otaku Orbit")
         st.caption(f"Your personal anime command centre | v{APP_VERSION}")
@@ -1506,25 +2150,13 @@ def main() -> None:
                 st.logout()
         else:
             st.info("Guest mode: data is isolated to this browser session and will not sync to another device.")
-        with st.expander("Privacy controls"):
-            st.caption("Delete this account's watchlist and saved notes from its private database.")
-            if st.button("Delete my watchlist data", key="delete-owner-data"):
-                st.session_state["confirm_delete_owner_data"] = True
-            if st.session_state.get("confirm_delete_owner_data"):
-                st.warning("This permanently deletes the watchlist and notes for this account or guest session.")
-                confirm_col, cancel_col = st.columns(2)
-                if confirm_col.button("Confirm deletion", key="confirm-owner-data-delete"):
-                    delete_owner_data(owner_id)
-                    st.session_state.pop("confirm_delete_owner_data", None)
-                    st.session_state.pop("offline_cache", None)
-                    st.success("Your watchlist data was deleted.")
-                    st.rerun()
-                if cancel_col.button("Cancel", key="cancel-owner-data-delete"):
-                    st.session_state.pop("confirm_delete_owner_data", None)
-                    st.rerun()
+
+        media_mode = st.radio("Media Type", ["Anime", "Manga & Light Novels"], horizontal=True, key="global_media_mode")
+        st.session_state["global_media_type"] = "MANGA" if media_mode == "Manga & Light Novels" else "ANIME"
+
         page = st.radio(
             "Navigate",
-            ["Discover", "For you", "Airing Calendar", "Seasonal", "Watchlist", "Statistics"],
+            ["Discover", "For you", "Airing Calendar", "Seasonal", "Watchlist", "Analytics & Insights", "Settings"],
             label_visibility="collapsed",
         )
         st.divider()
@@ -1563,31 +2195,42 @@ def main() -> None:
                 anilist_response.clear()
                 with st.spinner("Checking AniList availability"):
                     try:
-                        health_data = anilist_response(TRENDING_QUERY)
+                        health_data = anilist_response(TRENDING_QUERY, {"type": st.session_state["global_media_type"]})
                         media_count = len(health_data.get("Page", {}).get("media", []))
                         st.success(f"AniList is reachable and returned {media_count} titles.")
                     except (requests.RequestException, RuntimeError) as error:
                         st.error(f"AniList health check failed: {error}")
     st.markdown(f'<div class="orbit-credit">{AUTHOR_CREDIT}</div>', unsafe_allow_html=True)
 
+    reminders_enabled = st.session_state.get("show_airing_reminders", True)
+    countdown = get_next_airing_countdown(rows)
+    if countdown and reminders_enabled:
+        st.info(
+            f"📢 **Airing Soon:** **{countdown['title']}** (Episode {countdown['episode']}) broadcasts in **{countdown['hours']}h {countdown['minutes']}m**."
+        )
+
     if page == "Watchlist":
         render_watchlist(owner_id)
         return
-    if page == "Statistics":
-        render_stats(rows)
+    if page == "Analytics & Insights":
+        render_analytics(rows, owner_id)
+        return
+    if page == "Settings":
+        render_settings(owner_id)
         return
     if page == "For you":
         render_recommendations(rows, saved_ids, owner_id)
         return
     if page == "Airing Calendar":
-        render_airing_calendar(saved_ids, owner_id)
+        render_airing_calendar(rows, saved_ids, owner_id)
         return
     if page == "Discover":
         st.markdown(
             '<div class="orbit-hero"><div class="orbit-kicker">Anime discovery, upgraded</div><h1>Find your next obsession</h1><div class="orbit-muted">Search AniList, save what catches your eye, and let your watchlist become your personal anime map.</div></div>',
             unsafe_allow_html=True,
         )
-        query = st.text_input("Search anime", placeholder="Try Frieren, One Piece, or Cowboy Bebop")
+        query = st.text_input("Search titles", placeholder="Try Frieren, One Piece, or Cowboy Bebop")
+        m_type = st.session_state.get("global_media_type", "ANIME")
         if offline_mode_enabled():
             results = []
             st.info("Offline mode is enabled; AniList requests are disabled.")
@@ -1606,12 +2249,12 @@ def main() -> None:
             try:
                 if not search_state["results"]:
                     (first_page, has_next), from_cache = load_with_fallback(
-                        f"search:{query}:1", lambda: fetch_anime_page(query, page=1)
+                        f"search:{query}:1:{m_type}", lambda: fetch_anime_page(query, page=1, media_type=m_type)
                     )
                     search_state.update({"results": first_page, "page": 1, "has_next": has_next})
                     if from_cache:
                         st.info(
-                            f"Showing cached results from {cache_age_label(f'search:{query}:1')} because AniList is unavailable."
+                            f"Showing cached results from {cache_age_label(f'search:{query}:1:{m_type}')} because AniList is unavailable."
                         )
                 results = search_state["results"]
                 if search_state["has_next"] and st.button(
@@ -1619,7 +2262,8 @@ def main() -> None:
                 ):
                     next_page = search_state["page"] + 1
                     (next_results, has_next), _ = load_with_fallback(
-                        f"search:{query}:{next_page}", lambda: fetch_anime_page(query, page=next_page)
+                        f"search:{query}:{next_page}:{m_type}",
+                        lambda: fetch_anime_page(query, page=next_page, media_type=m_type),
                     )
                     search_state["results"] = [*search_state["results"], *next_results]
                     search_state.update({"page": next_page, "has_next": has_next})
@@ -1633,9 +2277,13 @@ def main() -> None:
         else:
             st.subheader("Trending now")
             try:
-                results, from_cache = load_with_fallback("trending", lambda: anilist_query(TRENDING_QUERY))
+                results, from_cache = load_with_fallback(
+                    f"trending:{m_type}", lambda: anilist_query(TRENDING_QUERY, {"type": m_type})
+                )
                 if from_cache:
-                    st.info(f"AniList is unavailable; showing trending results cached {cache_age_label('trending')}.")
+                    st.info(
+                        f"AniList is unavailable; showing trending results cached {cache_age_label(f'trending:{m_type}')}."
+                    )
             except (requests.RequestException, RuntimeError) as error:
                 st.warning(f"AniList is unavailable and no cached trending results exist yet: {error}")
                 results = []
@@ -1663,17 +2311,19 @@ def main() -> None:
         )
         st.title(f"{season.title()} {year}")
         st.write(f"Explore the anime lineup for {season.title()} {year}.")
+        m_type = st.session_state.get("global_media_type", "ANIME")
         if offline_mode_enabled():
             results = []
             st.info("Offline mode is enabled; AniList requests are disabled.")
         else:
             try:
                 results, from_cache = load_with_fallback(
-                    f"season:{season}:{year}", lambda: fetch_anime(season=season, year=year)
+                    f"season:{season}:{year}:{m_type}",
+                    lambda: fetch_anime(season=season, year=year, media_type=m_type),
                 )
                 if from_cache:
                     st.info(
-                        f"AniList is unavailable; showing seasonal results cached {cache_age_label(f'season:{season}:{year}')}."
+                        f"AniList is unavailable; showing seasonal results cached {cache_age_label(f'season:{season}:{year}:{m_type}')}."
                     )
             except (requests.RequestException, RuntimeError) as error:
                 st.error(f"Could not load the seasonal lineup: {error}")

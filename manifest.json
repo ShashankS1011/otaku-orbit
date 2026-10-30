@@ -1,0 +1,18 @@
+{
+  "name": "Otaku Orbit - Anime Command Centre",
+  "short_name": "Otaku Orbit",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#0e1020",
+  "theme_color": "#17132a",
+  "orientation": "portrait-primary",
+  "description": "Your personal anime command centre — discover, track, and curate your next obsession.",
+  "categories": ["entertainment", "utilities"],
+  "icons": [
+    {
+      "src": "https://otaku-orbit.streamlit.app/favicon.ico",
+      "sizes": "64x64 32x32 24x24 16x16",
+      "type": "image/x-icon"
+    }
+  ]
+}

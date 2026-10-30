@@ -1,5 +1,24 @@
 # Changelog
 
+## 1.6.0
+
+- Add Legal Streaming Availability & direct deeplinks (Crunchyroll, Netflix, Hulu, HIDIVE, Disney+, etc.) in anime detail modals.
+- Add Character & Japanese Voice Actor (Seiyuu) gallery displaying character roles and portraits.
+- Add Animation Studio and Source Material (Manga, Light Novel, Original, Web Novel) filtering on Discover and Seasonal views.
+- Add Theme Song Jukebox with one-click direct links to Spotify and YouTube Music for OPs, EDs, and OSTs.
+- Add interactive Analytics & Insights dashboard featuring score distributions, release era timelines, and genre profiles.
+- Add timestamped watch history logging and a GitHub-style 30-day viewing activity heatmap.
+- Add Binge Velocity pace tracking and automated completion date forecasts.
+- Add Milestone Badges & Achievements system tracking viewing progression and streaks.
+- Add iCalendar (.ics) export for upcoming episode broadcasts in the user's watchlist.
+- Add live Airing Countdown ticker banner on the dashboard for upcoming broadcasts within 48 hours.
+- Add interactive Tier List Maker organizing titles into S, A, B, C, and D tiers.
+- Add 1-click AniList profile library synchronization for public user accounts.
+- Add Manga & Light Novel tracking mode with chapters and volumes support.
+- Add instant in-memory watchlist search filter across titles, tags, notes, and genres.
+- Add Progressive Web App (PWA) manifest (`manifest.json`) and mobile installation support.
+- Expand test suite to 79 unit tests covering all 16 new capabilities.
+
 ## 1.5.0
 
 - Add Airing Calendar view for tracking upcoming weekly anime broadcasts in the user's timezone.
