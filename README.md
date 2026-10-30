@@ -221,11 +221,6 @@ Otaku Orbit strictly follows semantic versioning (`MAJOR.MINOR.PATCH`):
 
 ---
 
-## Contributors & Credits
-
-- **Shashank** — Project Creator and Maintainer
-- **butteryjam** — Discovered and reported the mobile browser JavaScript compatibility regression
-
 ## License
 
 Otaku Orbit is open-source software licensed under the MIT License.
