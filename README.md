@@ -50,7 +50,7 @@ Otaku Orbit delivers a frictionless anime tracking experience with zero forced s
 | **Persistence Engine** | SQLite 3 with composite indexes (`idx_watchlist_media_status`, `idx_watch_history_anime`) & WAL mode |
 | **Security & Hardening** | Bandit static analysis, `pip-audit` CVE vulnerability scanning, formula injection escaping |
 | **Linting & Formatting** | Ruff (fast static analysis, PEP 8 compliance, import sorting) |
-| **Quality & Testing** | `pytest` test suite (84 tests), Streamlit `AppTest`, Playwright mobile browser smoke tests |
+| **Quality & Testing** | `pytest` test suite (86 tests), Streamlit `AppTest`, Playwright mobile browser smoke tests |
 | **CI / CD Pipelines** | GitHub Actions matrix test suite, CodeQL security analysis, release integrity verification |
 
 ---
@@ -164,7 +164,7 @@ For multi-user deployments with OpenID Connect (OIDC), reference the template in
 Otaku Orbit maintains a comprehensive test suite covering database operations, API resilience, schema migrations, and frontend rendering:
 
 ```powershell
-# Run the unit and integration test suite (84 tests):
+# Run the unit and integration test suite (86 tests):
 python -m pytest -q tests/test_app.py
 
 # Verify Python syntax compilation:

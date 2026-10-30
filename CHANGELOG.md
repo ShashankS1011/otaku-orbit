@@ -4,8 +4,9 @@
 
 - Refactor application into a modular architecture across domain packages (`modules.config`, `modules.db`, `modules.api`, `modules.services`, `modules.ui`).
 - Enhance UI/UX with glassmorphism design system featuring backdrop blur filters, dynamic neon glow accents, smooth card hover elevations, and responsive typography.
+- Fix PWA manifest and meta tags rendering as raw code block at the top of the viewport by encapsulating them inside an invisible unindented container (fixes #37).
 - Optimize database performance by introducing composite indexes (`idx_watchlist_media_status`, `idx_watch_history_anime`) for high-speed queries on large collections.
-- Expand automated test suite to 84 comprehensive tests with 100% pass rate.
+- Expand automated test suite to 86 comprehensive tests with 100% pass rate.
 - Update GitHub Actions CI matrix to test and compile all modular domain packages across Python 3.11, 3.12, and 3.13.
 - Enhance Bandit static analysis and dependency security workflows to cover all domain modules.
 

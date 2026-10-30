@@ -15,7 +15,6 @@ from modules import (
     API_URL,
     APP_NAME,
     APP_URL,
-    APP_VERSION,
     AUTHOR_CREDIT,
     BACKUP_FORMAT_VERSION,
     DB_PATH,
@@ -103,6 +102,8 @@ from modules import (
     validate_backup_row,
     validate_watchlist_state,
 )
+
+APP_VERSION = "1.7.0"
 
 __all__ = [
     "ACHIEVEMENTS",
@@ -325,11 +326,13 @@ def main() -> None:
         }}
     }}
     </style>
-    <link rel="manifest" href="manifest.json">
-    <meta name="apple-mobile-web-app-capable" content="yes">
-    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-    <meta name="theme-color" content="{theme["primary"]}">
-    <meta name="application-name" content="Otaku Orbit">
+<div style="display:none !important;">
+<link rel="manifest" href="manifest.json">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="theme-color" content="{theme["primary"]}">
+<meta name="application-name" content="Otaku Orbit">
+</div>
     """,
         unsafe_allow_html=True,
     )
