@@ -24,7 +24,7 @@ def offline_mode_enabled() -> bool:
 
 
 APP_NAME = "Otaku Orbit"
-APP_VERSION = "1.9.0"
+APP_VERSION = "2.0.0"
 APP_URL = "https://otaku-orbit.streamlit.app/"
 SUPPORT_LINK = "https://discord.com/channels/@me/1252520070043668561/1562171196617785464"
 AUTHOR_CREDIT = "Made by Shashank — powered by Saiyan spirit"
@@ -552,3 +552,259 @@ ANIME_ARCHETYPES: dict[str, dict[str, str]] = {
         "icon": "⚔️",
     },
 }
+
+
+TRIVIA_QUESTION_BANK: list[dict[str, Any]] = [
+    {
+        "id": 1,
+        "question": "In 'Attack on Titan', what is the name of the elite military branch tasked with reclaiming Wall Maria?",
+        "options": ["Survey Corps (Scout Regiment)", "Garrison Regiment", "Military Police Brigade", "Yeagerists"],
+        "answer": "Survey Corps (Scout Regiment)",
+        "explanation": "The Survey Corps (or Scout Regiment) conducts expeditions beyond the walls to fight Titans and reclaim human territory.",
+        "difficulty": "Easy",
+    },
+    {
+        "id": 2,
+        "question": "Which animation studio produced 'Steins;Gate' (2011) and 'Re:Zero'?",
+        "options": ["White Fox", "MAPPA", "Ufotable", "A-1 Pictures"],
+        "answer": "White Fox",
+        "explanation": "Studio White Fox adapted both the seminal sci-fi thriller Steins;Gate and Re:Zero - Starting Life in Another World.",
+        "difficulty": "Medium",
+    },
+    {
+        "id": 3,
+        "question": "In 'Death Note', what is the real given name of the genius detective known as 'L'?",
+        "options": ["L Lawliet", "Light Yagami", "Near River", "Mihael Keehl"],
+        "answer": "L Lawliet",
+        "explanation": "L's full canonical name is revealed in 'Death Note 13: How to Read' as L Lawliet.",
+        "difficulty": "Hard",
+    },
+    {
+        "id": 4,
+        "question": "What is the name of Tanjiro Kamado's signature fire-based breathing technique in 'Demon Slayer'?",
+        "options": ["Hinokami Kagura (Sun Breathing)", "Flame Breathing", "Thunder Breathing", "Beast Breathing"],
+        "answer": "Hinokami Kagura (Sun Breathing)",
+        "explanation": "Hinokami Kagura is the Sun Breathing dance passed down through generations in the Kamado family.",
+        "difficulty": "Easy",
+    },
+    {
+        "id": 5,
+        "question": "Which Japanese voice actor voices both Light Yagami in 'Death Note' and Rintaro Okabe in 'Steins;Gate'?",
+        "options": ["Mamoru Miyano", "Hiroshi Kamiya", "Takehito Koyasu", "Yuki Kaji"],
+        "answer": "Mamoru Miyano",
+        "explanation": "Mamoru Miyano is celebrated for voicing both iconic protagonists with distinct dramatic gravitas.",
+        "difficulty": "Medium",
+    },
+]
+
+OST_QUIZ_BANK: list[dict[str, Any]] = [
+    {
+        "song_title": "Gurenge",
+        "artist": "LiSA",
+        "options": ["Demon Slayer: Kimetsu no Yaiba", "Sword Art Online", "Fate/Zero", "My Hero Academia"],
+        "answer": "Demon Slayer: Kimetsu no Yaiba",
+    },
+    {
+        "song_title": "The Rumbling",
+        "artist": "SiM",
+        "options": ["Attack on Titan", "Jujutsu Kaisen", "Chainsaw Man", "Tokyo Ghoul"],
+        "answer": "Attack on Titan",
+    },
+    {
+        "song_title": "Kaikai Kitan",
+        "artist": "Eve",
+        "options": ["Jujutsu Kaisen", "Dororo", "Bleach", "Black Clover"],
+        "answer": "Jujutsu Kaisen",
+    },
+    {
+        "song_title": "Again",
+        "artist": "YUI",
+        "options": ["Fullmetal Alchemist: Brotherhood", "Bleach", "Naruto Shippuden", "Hunter x Hunter"],
+        "answer": "Fullmetal Alchemist: Brotherhood",
+    },
+    {
+        "song_title": "Unravel",
+        "artist": "TK from Ling Tosite Sigure",
+        "options": ["Tokyo Ghoul", "Psycho-Pass", "Parasyte", "Death Note"],
+        "answer": "Tokyo Ghoul",
+    },
+]
+
+DAILY_QUESTS_TEMPLATE: list[dict[str, Any]] = [
+    {
+        "id": "quest_watch_ep",
+        "title": "Daily Binge Step",
+        "desc": "Watch and log at least 1 episode in your library today.",
+        "target": 1,
+        "xp": 50,
+    },
+    {
+        "id": "quest_ep_note",
+        "title": "Scholar's Reflection",
+        "desc": "Record a timestamped episode note or reflection on any anime.",
+        "target": 1,
+        "xp": 35,
+    },
+    {
+        "id": "quest_trivia",
+        "title": "Mind Arena",
+        "desc": "Answer the daily anime trivia question correctly.",
+        "target": 1,
+        "xp": 40,
+    },
+    {
+        "id": "quest_airing_check",
+        "title": "Satellite Surveillance",
+        "desc": "Inspect this week's Airing Calendar for upcoming broadcasts.",
+        "target": 1,
+        "xp": 25,
+    },
+]
+
+MANGA_ANIME_SYNC_MAP: dict[str, dict[str, Any]] = {
+    "One Piece": {
+        "formula": lambda ep: int(ep * 0.98 + 1),
+        "source": "Weekly Shonen Jump",
+        "manga_title": "One Piece",
+    },
+    "Jujutsu Kaisen": {
+        "formula": lambda ep: int(ep * 2.8 + 1) if ep <= 24 else int(64 + (ep - 24) * 2.5),
+        "source": "Weekly Shonen Jump",
+        "manga_title": "Jujutsu Kaisen",
+    },
+    "Demon Slayer: Kimetsu no Yaiba": {
+        "formula": lambda ep: int(ep * 2.1),
+        "source": "Weekly Shonen Jump",
+        "manga_title": "Demon Slayer",
+    },
+    "Chainsaw Man": {
+        "formula": lambda ep: int(ep * 3.1),
+        "source": "Shonen Jump+",
+        "manga_title": "Chainsaw Man",
+    },
+    "Frieren: Beyond Journey's End": {
+        "formula": lambda ep: int(ep * 2.1),
+        "source": "Weekly Shonen Sunday",
+        "manga_title": "Sousou no Frieren",
+    },
+}
+
+ANIME_LOFI_STREAMS: list[dict[str, str]] = [
+    {
+        "title": "Lofi Girl - Synthwave & Chill Anime Beats",
+        "stream_url": "https://www.youtube.com/embed/jfKfPfyJRdk?autoplay=0",
+    },
+    {
+        "title": "Anime Cozy Coffee Shop & Rain Study Lo-Fi",
+        "stream_url": "https://www.youtube.com/embed/5qap5aO4i9A?autoplay=0",
+    },
+    {
+        "title": "Studio Ghibli Ambient Piano Medley",
+        "stream_url": "https://www.youtube.com/embed/GNWLILeZXk4?autoplay=0",
+    },
+]
+
+CHARACTER_QUOTES: list[dict[str, str]] = [
+    {
+        "character": "Erwin Smith",
+        "anime": "Attack on Titan",
+        "quote": "My soldiers, rage! My soldiers, scream! My soldiers, fight!",
+        "context": "Charge against the Beast Titan in the Battle of Shiganshina.",
+    },
+    {
+        "character": "Satoru Gojo",
+        "anime": "Jujutsu Kaisen",
+        "quote": "Don't worry, I'm the strongest.",
+        "context": "Reassuring Megumi during initial confrontation with Sukuna.",
+    },
+    {
+        "character": "Simon the Digger",
+        "anime": "Tengen Toppa Gurren Lagann",
+        "quote": "Believe in the me that believes in you!",
+        "context": "Kamina passing his indomitable spirit to Simon.",
+    },
+    {
+        "character": "Lelouch vi Britannia",
+        "anime": "Code Geass",
+        "quote": "The only ones who should kill are those who are prepared to be killed.",
+        "context": "Lelouch's core philosophy driving the Black Knights rebellion.",
+    },
+    {
+        "character": "Spike Spiegel",
+        "anime": "Cowboy Bebop",
+        "quote": "Whatever happens, happens.",
+        "context": "Spike's philosophical acceptance of fate and destiny.",
+    },
+    {
+        "character": "Edward Elric",
+        "anime": "Fullmetal Alchemist: Brotherhood",
+        "quote": "A lesson without pain is meaningless. You cannot gain something without sacrificing something in return.",
+        "context": "The principle of Equivalent Exchange and human resilience.",
+    },
+]
+
+FRANCHISE_ARCS: dict[str, list[dict[str, Any]]] = {
+    "Hunter x Hunter": [
+        {"name": "Hunter Exam Arc", "start_ep": 1, "end_ep": 21, "avg_score": 84},
+        {"name": "Zoldyck Family & Heavens Arena", "start_ep": 22, "end_ep": 36, "avg_score": 86},
+        {"name": "Yorknew City Arc (Phantom Troupe)", "start_ep": 37, "end_ep": 58, "avg_score": 93},
+        {"name": "Greed Island Arc", "start_ep": 59, "end_ep": 75, "avg_score": 85},
+        {"name": "Chimera Ant Arc", "start_ep": 76, "end_ep": 136, "avg_score": 97},
+        {"name": "13th Hunter Chairman Election Arc", "start_ep": 137, "end_ep": 148, "avg_score": 89},
+    ],
+    "Attack on Titan": [
+        {"name": "Fall of Shiganshina & Trost", "start_ep": 1, "end_ep": 13, "avg_score": 88},
+        {"name": "Female Titan Arc", "start_ep": 14, "end_ep": 25, "avg_score": 89},
+        {"name": "Clash of the Titans Arc", "start_ep": 26, "end_ep": 37, "avg_score": 91},
+        {"name": "Royal Government Arc", "start_ep": 38, "end_ep": 49, "avg_score": 90},
+        {"name": "Return to Shiganshina Arc", "start_ep": 50, "end_ep": 59, "avg_score": 98},
+        {"name": "Marley & War for Paradis", "start_ep": 60, "end_ep": 89, "avg_score": 94},
+    ],
+    "Jujutsu Kaisen": [
+        {"name": "Fearsome Womb & Kyoto Goodwill", "start_ep": 1, "end_ep": 21, "avg_score": 87},
+        {"name": "Death Painting Arc", "start_ep": 22, "end_ep": 24, "avg_score": 88},
+        {"name": "Hidden Inventory / Premature Death", "start_ep": 25, "end_ep": 29, "avg_score": 95},
+        {"name": "Shibuya Incident Arc", "start_ep": 30, "end_ep": 47, "avg_score": 97},
+    ],
+}
+
+GLOBAL_GENRE_BENCHMARKS: dict[str, float] = {
+    "Action": 24.5,
+    "Adventure": 14.0,
+    "Comedy": 18.2,
+    "Drama": 12.8,
+    "Fantasy": 16.0,
+    "Psychological": 5.4,
+    "Romance": 9.8,
+    "Sci-Fi": 8.1,
+    "Slice of Life": 11.2,
+    "Supernatural": 13.5,
+}
+
+TIME_EQUIVALENCE_RATES: list[dict[str, Any]] = [
+    {
+        "milestone": "Fly to the Moon and back (Apollo 11 mission time: 195 hours)",
+        "hours_required": 195,
+        "icon": "🚀",
+    },
+    {
+        "milestone": "Run 20 full marathons at average pace (85 hours)",
+        "hours_required": 85,
+        "icon": "🏃",
+    },
+    {
+        "milestone": "Listen to the complete Lord of the Rings unabridged audiobooks (54 hours)",
+        "hours_required": 54,
+        "icon": "📖",
+    },
+    {
+        "milestone": "Climb Mount Everest expedition standard duration (120 hours active climb)",
+        "hours_required": 120,
+        "icon": "🏔️",
+    },
+    {
+        "milestone": "Reach Conversational B1 Fluency in a new language (350 hours)",
+        "hours_required": 350,
+        "icon": "🗣️",
+    },
+]

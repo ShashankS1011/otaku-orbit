@@ -8,7 +8,7 @@ Welcome to the orbit, traveller. Whether you're ascending to Super Saiyan over w
 
 [Open Otaku Orbit](https://otaku-orbit.streamlit.app/)
 
-Current version: `1.9.0`
+Current version: `2.0.0`
 
 ---
 
@@ -37,6 +37,24 @@ Otaku Orbit delivers a frictionless anime tracking experience with zero forced s
 - **Personal Watchlist RSS 2.0 Feed**: Subscribe to automated airing update feeds for titles in your active queue.
 - **Comprehensive Ecosystem Sync**: Two-way export and import for Kitsu JSON, SIMKL CSV, MyAnimeList (MAL) XML, spreadsheet CSV with formula sanitization, and atomic JSON backups.
 - **Cloud SQLite Snapshot (Zero Data Loss)**: Base64 export and restore of raw SQLite databases for zero data loss on cloud ephemeral instances.
+- **Daily Otaku Trivia Arena**: Deterministic daily anime questions, multi-choice answer validation, score accumulation, and streak tracking.
+- **OST Quiz & Blind Audio Test**: Interactive audio trivia challenge testing your memory of iconic anime theme songs.
+- **Daily & Weekly Otaku Quests**: Earn daily XP rewards and stay consistent with gamified viewing milestones and logging quests.
+- **Binge Budget Planner**: Calculate exact episode allotments fitting your available daily or weekend free-time budgets.
+- **Playback Speed Watchtime Calculator**: Live calculation of actual viewing hours and hours saved across 1.0x to 2.5x playback speeds.
+- **Manga Chapter Sync**: Bridge anime viewing progress directly to official source manga starting chapters (*Frieren*, *JJK*, *Demon Slayer*, *One Piece*).
+- **Watchlist Decay & Stagnation Auditor**: Detect abandoned backlog entries dormant for >180 days and compute total backlog hours saved.
+- **Ambient Anime Lo-Fi Radio Player**: Aesthetic embedded lo-fi stream player directly inside the anime command centre.
+- **Dynamic Trailer Theater**: Immersive modal player embedding official high-definition trailers from YouTube and AniList.
+- **Vector Wallpaper Poster Generator**: Export 1080p and 4K SVG poster wallpapers styled with studio credits and community ratings.
+- **Anime Quote of the Day**: Daily cycle of iconic quotes from legendary anime heroes and villains.
+- **Story Arc Progression Trackers**: Step-by-step milestone arcs and episode ranges for epic sagas (*Hunter x Hunter*, *Attack on Titan*, *Jujutsu Kaisen*).
+- **Multi-Axis Genre Radar Benchmarking**: Benchmark your library taste profile against global anime community distributions.
+- **Watchtime Milestones & Real-World Equivalents**: Convert your viewing hours into transatlantic flights, classic novels read, and orbital space missions.
+- **Voice Actor (Seiyuu) Network Graph**: Map shared cast appearances and co-star relationships across your entire library.
+- **Headless API & JSON Scripting Mode**: Direct REST-like endpoints (`/api/v1/health`, `/api/v1/watchlist`, `/api/v1/stats`, `/api/v1/progress/increment`) for headless automations.
+- **Automated Visual Regression & Glassmorphism Contract**: Automated test suite verifying backdrop-blur, radius, and glow CSS token integrity.
+- **Cloud Storage Sync & Offline IndexedDB Mirroring**: Export AWS S3/Cloudflare R2 backup payloads and generate client-side IndexedDB mirroring scripts for offline resilience.
 - **Privacy & Security First**: Session-scoped guest data, optional per-user OIDC SQLite isolation, automated database migrations, and one-click data deletion.
 
 ---
