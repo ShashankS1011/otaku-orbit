@@ -1,5 +1,35 @@
 # Changelog
 
+## 1.9.0
+
+- Add Curated Filler Guides & Canon Detection (`FILLER_GUIDES`, `get_filler_guide`, `is_episode_filler`, `get_next_canon_episode`) for classic long-running anime (*Naruto*, *Bleach*, *One Piece*, *Gintama*, *DBZ*).
+- Add Natural Language "Vibe & Premise" Semantic Search (`search_by_vibe`) matching free-form synopsis and thematic queries.
+- Add Character Tropes & Dynamic Chemistry Matcher (`CHARACTER_TROPES`, `match_anime_by_trope`) categorizing titles by beloved character tropes.
+- Add Adaptive Backlog Prioritizer (`calculate_backlog_priority`) smartly sorting user queues by taste score and pacing.
+- Add Franchise Sequel & Spinoff Alert Radar (`detect_franchise_sequels`) discovering uncompleted next seasons and side-stories for completed titles.
+- Add Dynamic Ambient Glow Background Generator (`generate_ambient_glow_css`) matching page background accents to active anime cover art.
+- Add Custom Theme Studio & Palette Designer (`create_custom_theme_palette`) allowing full personalization of neon primary, glow, and metric colors.
+- Add Cinematic Modal Presentation layout (`generate_cinematic_modal_html`) featuring wide banner backdrops and typography.
+- Add Persistent Mini-Dock Widget state helper (`get_mini_dock_state`) tracking currently active series with 1-click progress increment.
+- Add Audio Feedback & Synthesizer Data URIs (`get_sound_effects_data_uris`) for UI chimes and feedback.
+- Add Spotify-Style "Anime Wrapped" Year-in-Review Dossier (`generate_anime_wrapped_data`, `generate_anime_wrapped_svg`) generating vector infographic cards and assigning user anime archetypes.
+- Add Anime Season Fantasy League (`record_fantasy_prediction`, `fetch_fantasy_predictions`, `evaluate_fantasy_score`) scoring seasonal rank predictions.
+- Add Printable Bullet Journal Watch Tracker (`generate_bujo_tracker_markdown`, `generate_bujo_tracker_html`) for offline and Notion tracking.
+- Add Community Tier List Preset Templates (`TIER_LIST_TEMPLATES`, `get_tier_list_template`) for Openings, Antagonists, and Masterpieces.
+- Add Watch Party Synchronized Timestamp Links (`generate_watch_party_sync_link`, `parse_watch_party_sync_link`) for remote shared viewing.
+- Add Animation Studio Loyalty Radar & Director Index (`calculate_studio_loyalty_index`) tracking stats across MAPPA, Ufotable, Bones, KyoAni, etc.
+- Add Cumulative Seiyuu (Voice Actor) Screen-Time Calculator (`calculate_seiyuu_screen_time`) computing total hours listened per voice actor.
+- Add The 3-Episode Rule & Drop-off Statistics (`calculate_drop_off_statistics`) analyzing drop curves and median drop episodes.
+- Add Historical Era & Decade Chronology Breakdown (`HISTORICAL_ERAS`, `calculate_era_distribution`) bucketing titles across 80s, 90s, 2000s, 2010s, and 2020s.
+- Add Watch Velocity Pacing Alert & Habit Evaluator (`evaluate_pacing_alert`) providing pacing status and motivating tips.
+- Add Custom Webhook Automation (`generate_custom_webhook_payload`) dispatching JSON payloads to external endpoints on episode completion.
+- Add Multi-Profile Household Switcher (`list_user_profiles`, `create_user_profile`, `delete_user_profile`) supporting distinct isolated libraries.
+- Add Direct API Token Session Management (`save_api_token`, `fetch_api_token`, `generate_direct_sync_request`) for authenticated synchronization.
+- Add GitHub Gist / Cloud Backup Export Payload (`prepare_gist_backup_payload`).
+- Add Personal Watchlist RSS 2.0 Airing Feed Generator (`generate_watchlist_rss_feed`) generating standard XML episode release feeds.
+- Refresh README.md with an electric, community-first anime fan introduction while upholding the strict single external link constraint.
+- Expand automated test suite to 115+ unit and integration tests.
+
 ## 1.8.0
 
 - Add Anime Wheel of Fortune Backlog Decision Maker (`pick_random_backlog`) to pick the next title based on mood, status, or duration filters.

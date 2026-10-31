@@ -14,12 +14,17 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from modules.config import (
     ACHIEVEMENTS,
+    ANIME_ARCHETYPES,
     ANIME_MOODS,
     APP_URL,
     APP_VERSION,
     BACKUP_FORMAT_VERSION,
     BINGO_CHALLENGES,
+    CHARACTER_TROPES,
+    FILLER_GUIDES,
     FRANCHISE_WATCH_ORDERS,
+    HISTORICAL_ERAS,
+    TIER_LIST_TEMPLATES,
 )
 
 
@@ -49,8 +54,12 @@ def is_safe_cover_url(value: Any) -> bool:
 
 
 def display_title(anime: dict[str, Any]) -> str:
-    title = anime.get("title", {})
-    return title.get("english") or title.get("romaji") or title.get("native") or "Untitled"
+    title = anime.get("title")
+    if isinstance(title, str):
+        return title.strip()
+    if isinstance(title, dict):
+        return title.get("english") or title.get("romaji") or title.get("native") or "Untitled"
+    return "Untitled"
 
 
 def clean_description(text: str | None) -> str:
@@ -1046,3 +1055,618 @@ self.addEventListener('fetch', (event) => {{
   );
 }});
 """
+
+
+def get_filler_guide(title: str) -> dict[str, Any] | None:
+    norm_title = title.strip().lower()
+    for series_name, guide in FILLER_GUIDES.items():
+        if series_name.lower() in norm_title or norm_title in series_name.lower():
+            total = guide.get("total", 0)
+            filler_eps = []
+            for start, end in guide.get("filler", []):
+                filler_eps.extend(range(start, end + 1))
+            filler_pct = round((len(filler_eps) / max(1, total)) * 100, 1)
+            return {
+                "series": series_name,
+                "total": total,
+                "filler_episodes": set(filler_eps),
+                "filler_ranges": guide.get("filler", []),
+                "canon_ranges": guide.get("canon", []),
+                "filler_count": len(filler_eps),
+                "filler_percentage": filler_pct,
+                "tip": guide.get("tip", ""),
+            }
+    return None
+
+
+def is_episode_filler(title: str, episode: int) -> bool:
+    guide = get_filler_guide(title)
+    if not guide:
+        return False
+    return episode in guide["filler_episodes"]
+
+
+def get_next_canon_episode(title: str, current_episode: int) -> int:
+    guide = get_filler_guide(title)
+    if not guide:
+        return current_episode + 1
+    next_ep = current_episode + 1
+    total = guide.get("total", 2000)
+    while next_ep in guide["filler_episodes"] and next_ep <= total:
+        next_ep += 1
+    return next_ep
+
+
+def search_by_vibe(query: str, catalogue: list[dict[str, Any]], top_k: int = 15) -> list[dict[str, Any]]:
+    if not query or not query.strip():
+        return catalogue[:top_k]
+    tokens = [t.lower() for t in re.findall(r"\w+", query.strip()) if len(t) >= 3]
+    if not tokens:
+        return catalogue[:top_k]
+
+    scored = []
+    for anime in catalogue:
+        title = display_title(anime).lower()
+        desc = (clean_description(anime.get("description") or "")).lower()
+        genres = [g.lower() for g in anime.get("genres", [])]
+        studio_info = anime.get("studios", {})
+        studios = []
+        if isinstance(studio_info, dict):
+            studios = [n.get("name", "").lower() for n in studio_info.get("nodes", []) if isinstance(n, dict)]
+
+        score = 0
+        for token in tokens:
+            if token in title:
+                score += 10
+            if token in genres:
+                score += 6
+            if any(token in s for s in studios):
+                score += 5
+            if token in desc:
+                score += 2
+
+        if score > 0:
+            scored.append((score, anime))
+
+    scored.sort(key=lambda x: x[0], reverse=True)
+    return [item[1] for item in scored[:top_k]]
+
+
+def match_anime_by_trope(trope_name: str, catalogue: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    trope_info = CHARACTER_TROPES.get(trope_name)
+    if not trope_info:
+        return catalogue
+    target_genres = set(g.lower() for g in trope_info.get("genres", []))
+    results = []
+    for anime in catalogue:
+        genres = [g.lower() for g in anime.get("genres", [])]
+        if any(g in target_genres for g in genres):
+            results.append(anime)
+    return results
+
+
+def calculate_backlog_priority(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    planning = [r for r in rows if r.get("status") in {"PLANNING", "WATCHING"}]
+    if not planning:
+        return list(rows)
+
+    def priority_score(item: dict[str, Any]) -> float:
+        score = float(item.get("user_score") or item.get("score") or 70)
+        eps = item.get("episodes") or 12
+        length_penalty = math.log10(max(1, eps)) * 2
+        return score - length_penalty
+
+    return sorted(planning, key=priority_score, reverse=True)
+
+
+def detect_franchise_sequels(
+    completed_titles: list[dict[str, Any]],
+    all_catalogue: list[dict[str, Any]] | None = None,
+) -> list[dict[str, Any]]:
+    completed_names = {display_title(r).lower() for r in completed_titles}
+    catalogue = all_catalogue or []
+    detected = []
+    franchise_keywords = [
+        "fate",
+        "steins;gate",
+        "attack on titan",
+        "demon slayer",
+        "jujutsu kaisen",
+        "sword art online",
+        "my hero academia",
+        "monogatari",
+        "mob psycho",
+        "konosuba",
+    ]
+    for c in completed_names:
+        matched_kw = next((kw for kw in franchise_keywords if kw in c), None)
+        if matched_kw:
+            for item in catalogue:
+                item_title = display_title(item).lower()
+                if matched_kw in item_title and item_title not in completed_names:
+                    detected.append(item)
+    return detected[:10]
+
+
+def generate_ambient_glow_css(accent_hex: str) -> str:
+    color = accent_hex if accent_hex.startswith("#") else "#f4b8ff"
+    return f"""<style>
+    .stApp {{
+        background: radial-gradient(circle at 50% -10%, {color}1a 0%, rgba(13, 11, 24, 0.98) 75%), #0a0a14 !important;
+        background-attachment: fixed !important;
+    }}
+    .orbit-hero {{
+        box-shadow: 0 10px 40px {color}28, 0 0 80px {color}14 !important;
+        border-color: {color}44 !important;
+    }}
+    </style>"""
+
+
+def create_custom_theme_palette(
+    primary_hex: str,
+    glow_rgba: str,
+    metric_hex: str,
+    sidebar_bg: str = "#121020",
+) -> dict[str, str]:
+    return {
+        "primary": primary_hex.strip(),
+        "glow": glow_rgba.strip(),
+        "metric": metric_hex.strip(),
+        "sidebar": sidebar_bg.strip(),
+    }
+
+
+def generate_cinematic_modal_html(anime: dict[str, Any]) -> str:
+    title = display_title(anime)
+    banner = banner_image_url(anime) or cover_image_url(anime) or ""
+    score = anime.get("averageScore") or anime.get("score") or "N/A"
+    episodes = anime.get("episodes") or "?"
+    format_name = anime.get("format") or "TV"
+    desc = clean_description(anime.get("description") or "No synopsis available.")
+    return f"""<div style="position:relative;border-radius:24px;overflow:hidden;border:1px solid rgba(255,255,255,0.15);background:#0e0c1a;margin-bottom:1.5rem;">
+  <div style="height:260px;background-image:url('{banner}');background-size:cover;background-position:center;position:relative;">
+    <div style="position:absolute;inset:0;background:linear-gradient(to bottom, rgba(14,12,26,0.1) 0%, #0e0c1a 100%);"></div>
+  </div>
+  <div style="padding:1.5rem 2rem;position:relative;margin-top:-60px;">
+    <span style="background:#f4b8ff22;color:#f4b8ff;padding:4px 12px;border-radius:12px;font-size:0.8rem;font-weight:700;border:1px solid #f4b8ff44;">{format_name} · {episodes} EPS · ⭐ {score}%</span>
+    <h1 style="color:#ffffff;margin:0.5rem 0 0.8rem;font-size:2rem;font-weight:900;">{title}</h1>
+    <p style="color:#b5b3c8;line-height:1.6;font-size:0.95rem;max-width:850px;">{html.escape(desc[:500])}...</p>
+  </div>
+</div>"""
+
+
+def get_mini_dock_state(rows: list[dict[str, Any]]) -> dict[str, Any] | None:
+    in_progress = [r for r in rows if r.get("status") in {"WATCHING", "REWATCHING"}]
+    if not in_progress:
+        return None
+    latest = in_progress[0]
+    title = latest.get("title", "Anime")
+    cur = latest.get("progress", 0)
+    total = latest.get("episodes") or cur or 12
+    pct = int(min(100, max(0, (cur / max(1, total)) * 100)))
+    return {
+        "anime_id": latest.get("anime_id"),
+        "title": title,
+        "progress": cur,
+        "total": total,
+        "percentage": pct,
+        "next_episode": cur + 1,
+    }
+
+
+def get_sound_effects_data_uris() -> dict[str, str]:
+    # Ultra-short embedded base64 wav pings
+    return {
+        "click": "data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEARKwAAIhYAQACABAAZGF0YQAAAAA=",
+        "chime": "data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEARKwAAIhYAQACABAAZGF0YQAAAAA=",
+    }
+
+
+def generate_anime_wrapped_data(rows: list[dict[str, Any]], history: list[dict[str, Any]]) -> dict[str, Any]:
+    total_eps = sum(r.get("progress", 0) for r in rows)
+    total_hours = (
+        sum(
+            min(r.get("progress", 0), r.get("episodes") or r.get("progress", 0)) * (r.get("duration") or 24)
+            for r in rows
+        )
+        // 60
+    )
+    completed = [r for r in rows if r.get("status") == "COMPLETED"]
+
+    genres: dict[str, int] = {}
+    for r in rows:
+        for g in (r.get("genres") or "").split(","):
+            g = g.strip()
+            if g:
+                genres[g] = genres.get(g, 0) + 1
+    top_genre = max(genres, key=genres.get) if genres else "Explorer"
+
+    # Days of week analysis
+    days_count: dict[str, int] = {}
+    for h in history:
+        try:
+            dt = datetime.fromisoformat(h.get("watched_at", "2026-01-01"))
+            day_name = dt.strftime("%A")
+            days_count[day_name] = days_count.get(day_name, 0) + 1
+        except Exception:
+            pass
+    peak_day = max(days_count, key=days_count.get) if days_count else "Saturday"
+
+    # Select Archetype
+    if "action" in top_genre.lower() or "sports" in top_genre.lower():
+        archetype = ANIME_ARCHETYPES["The Shonen Champion"]
+    elif "psychological" in top_genre.lower() or "mystery" in top_genre.lower():
+        archetype = ANIME_ARCHETYPES["The Seinen Philosopher"]
+    elif "slice of life" in top_genre.lower() or "comedy" in top_genre.lower():
+        archetype = ANIME_ARCHETYPES["The Slice-of-Life Healer"]
+    else:
+        archetype = ANIME_ARCHETYPES["The Isekai Wanderer"]
+
+    return {
+        "total_episodes": total_eps,
+        "total_hours": total_hours,
+        "completed_count": len(completed),
+        "top_genre": top_genre,
+        "peak_day": peak_day,
+        "archetype": archetype,
+    }
+
+
+def generate_anime_wrapped_svg(wrapped_data: dict[str, Any], username: str = "Otaku Traveler") -> str:
+    eps = wrapped_data.get("total_episodes", 0)
+    hours = wrapped_data.get("total_hours", 0)
+    completed = wrapped_data.get("completed_count", 0)
+    genre = wrapped_data.get("top_genre", "Action")
+    peak_day = wrapped_data.get("peak_day", "Saturday")
+    arch = wrapped_data.get("archetype", ANIME_ARCHETYPES["The Shonen Champion"])
+    arch_title = arch["title"]
+    arch_tag = arch["tagline"]
+    arch_icon = arch["icon"]
+
+    return f"""<svg xmlns="http://www.w3.org/2000/svg" width="800" height="900" viewBox="0 0 800 900">
+  <defs>
+    <linearGradient id="wrapBg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#19102e"/>
+      <stop offset="50%" stop-color="#0f0c1a"/>
+      <stop offset="100%" stop-color="#05040a"/>
+    </linearGradient>
+    <linearGradient id="neonBar" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#f4b8ff"/>
+      <stop offset="50%" stop-color="#6f4cff"/>
+      <stop offset="100%" stop-color="#00f0ff"/>
+    </linearGradient>
+  </defs>
+  <rect width="800" height="900" rx="32" fill="url(#wrapBg)" stroke="rgba(244,184,255,0.3)" stroke-width="2"/>
+  
+  <text x="60" y="90" font-family="'Segoe UI', Roboto, sans-serif" font-size="34" font-weight="900" fill="url(#neonBar)">OTAKU ORBIT WRAPPED</text>
+  <text x="60" y="125" font-family="'Segoe UI', Roboto, sans-serif" font-size="16" fill="#8c89a0" letter-spacing="2">ANNUAL VIEWING DOSSIER · {username.upper()}</text>
+
+  <rect x="60" y="160" width="680" height="220" rx="20" fill="rgba(255,255,255,0.03)" stroke="rgba(255,255,255,0.08)"/>
+  <circle cx="160" cy="270" r="60" fill="#241a45" stroke="url(#neonBar)" stroke-width="2"/>
+  <text x="160" y="285" font-family="'Segoe UI', Roboto, sans-serif" font-size="50" text-anchor="middle">{arch_icon}</text>
+  <text x="250" y="235" font-family="'Segoe UI', Roboto, sans-serif" font-size="13" fill="#8c89a0" letter-spacing="1.5">YOUR ANIME ARCHETYPE</text>
+  <text x="250" y="275" font-family="'Segoe UI', Roboto, sans-serif" font-size="28" font-weight="800" fill="#ffffff">{arch_title}</text>
+  <text x="250" y="310" font-family="'Segoe UI', Roboto, sans-serif" font-size="15" fill="#00f0ff">{arch_tag}</text>
+
+  <g transform="translate(60, 420)">
+    <rect width="325" height="130" rx="18" fill="rgba(255,255,255,0.03)" stroke="rgba(255,255,255,0.08)"/>
+    <text x="24" y="42" font-family="'Segoe UI', Roboto, sans-serif" font-size="13" fill="#8c89a0">HOURS LOGGED</text>
+    <text x="24" y="92" font-family="'Segoe UI', Roboto, sans-serif" font-size="36" font-weight="900" fill="#f4b8ff">{hours} hrs</text>
+  </g>
+  <g transform="translate(415, 420)">
+    <rect width="325" height="130" rx="18" fill="rgba(255,255,255,0.03)" stroke="rgba(255,255,255,0.08)"/>
+    <text x="24" y="42" font-family="'Segoe UI', Roboto, sans-serif" font-size="13" fill="#8c89a0">EPISODES WATCHED</text>
+    <text x="24" y="92" font-family="'Segoe UI', Roboto, sans-serif" font-size="36" font-weight="900" fill="#00f0ff">{eps}</text>
+  </g>
+  
+  <g transform="translate(60, 580)">
+    <rect width="325" height="130" rx="18" fill="rgba(255,255,255,0.03)" stroke="rgba(255,255,255,0.08)"/>
+    <text x="24" y="42" font-family="'Segoe UI', Roboto, sans-serif" font-size="13" fill="#8c89a0">COMPLETED SERIES</text>
+    <text x="24" y="92" font-family="'Segoe UI', Roboto, sans-serif" font-size="36" font-weight="900" fill="#00ff88">{completed}</text>
+  </g>
+  <g transform="translate(415, 580)">
+    <rect width="325" height="130" rx="18" fill="rgba(255,255,255,0.03)" stroke="rgba(255,255,255,0.08)"/>
+    <text x="24" y="42" font-family="'Segoe UI', Roboto, sans-serif" font-size="13" fill="#8c89a0">PEAK BINGE DAY</text>
+    <text x="24" y="92" font-family="'Segoe UI', Roboto, sans-serif" font-size="32" font-weight="900" fill="#ffbf7f">{peak_day}</text>
+  </g>
+
+  <rect x="60" y="740" width="680" height="90" rx="18" fill="rgba(255,255,255,0.03)" stroke="rgba(255,255,255,0.08)"/>
+  <text x="30" y="40" transform="translate(60, 740)" font-family="'Segoe UI', Roboto, sans-serif" font-size="13" fill="#8c89a0">DOMINANT GENRE</text>
+  <text x="30" y="68" transform="translate(60, 740)" font-family="'Segoe UI', Roboto, sans-serif" font-size="22" font-weight="800" fill="#ffffff">#1 Affinity: {genre}</text>
+</svg>"""
+
+
+def evaluate_fantasy_score(predictions: list[dict[str, Any]], actual_rankings: dict[int, int]) -> int:
+    total_points = 0
+    for p in predictions:
+        aid = p.get("anime_id")
+        pred_rank = p.get("predicted_rank", 1)
+        if aid in actual_rankings:
+            diff = abs(pred_rank - actual_rankings[aid])
+            if diff == 0:
+                total_points += 100
+            elif diff == 1:
+                total_points += 60
+            elif diff == 2:
+                total_points += 30
+            elif diff <= 4:
+                total_points += 10
+    return total_points
+
+
+def generate_bujo_tracker_markdown(rows: list[dict[str, Any]]) -> str:
+    lines = [
+        "# 📓 Otaku Orbit Bullet Journal Watch Tracker",
+        f"> Generated on {date.today().isoformat()} · Track your offline journey",
+        "",
+        "| Status | Anime Title | Progress Checkbox | Rating | Notes & Highlights |",
+        "| :--- | :--- | :--- | :--- | :--- |",
+    ]
+    for r in rows:
+        title = r.get("title", "Anime")
+        cur = r.get("progress", 0)
+        tot = r.get("episodes") or cur
+        status = r.get("status", "PLANNING")
+        stars = "★" * int(min(5, max(1, (r.get("user_score") or 80) // 20)))
+        boxes = f"[{cur}/{tot}] [ ] [ ] [ ]"
+        lines.append(f"| {status} | **{title}** | {boxes} | {stars} | |")
+    return "\n".join(lines)
+
+
+def generate_bujo_tracker_html(rows: list[dict[str, Any]]) -> str:
+    items_html = []
+    for r in rows:
+        title = html.escape(r.get("title", "Anime"))
+        cur = r.get("progress", 0)
+        tot = r.get("episodes") or "?"
+        status = r.get("status", "PLANNING")
+        items_html.append(f"""<div style="border:1px solid #333;border-radius:12px;padding:12px;margin-bottom:12px;page-break-inside:avoid;">
+  <div style="display:flex;justify-content:space-between;font-weight:bold;">
+    <span>{title}</span>
+    <span>[{status}] {cur} / {tot}</span>
+  </div>
+  <div style="margin-top:8px;font-size:14px;color:#666;">
+    Progress: [ ] [ ] [ ] [ ] [ ] &nbsp;&nbsp;&nbsp;&nbsp; Rating: [ ★ ★ ★ ★ ★ ]
+  </div>
+  <div style="margin-top:8px;border-bottom:1px dashed #ccc;height:18px;"></div>
+</div>""")
+    return f"""<!DOCTYPE html>
+<html>
+<head><title>Otaku Orbit Printable Tracker</title></head>
+<body style="font-family:'Segoe UI',Roboto,sans-serif;max-width:800px;margin:2rem auto;padding:1rem;">
+  <h2>📓 Otaku Orbit - Bullet Journal Watchlist</h2>
+  {"".join(items_html)}
+</body>
+</html>"""
+
+
+def get_tier_list_template(template_name: str) -> dict[str, str]:
+    return TIER_LIST_TEMPLATES.get(template_name, TIER_LIST_TEMPLATES["All-Time Masterpieces"])
+
+
+def generate_watch_party_sync_link(anime_id: int, title: str, episode: int, timestamp_sec: int = 0) -> str:
+    q = quote(title)
+    return f"{APP_URL}?party=1&anime_id={anime_id}&title={q}&ep={episode}&ts={timestamp_sec}"
+
+
+def parse_watch_party_sync_link(query_or_url: str) -> dict[str, Any]:
+    parsed = urlparse(query_or_url)
+    qs = parsed.query if parsed.query else query_or_url.lstrip("?")
+    params: dict[str, Any] = {}
+    for part in qs.split("&"):
+        if "=" in part:
+            k, v = part.split("=", 1)
+            params[k] = v
+    try:
+        aid = int(params.get("anime_id", 0))
+    except ValueError:
+        aid = 0
+    try:
+        ep = int(params.get("ep", 1))
+    except ValueError:
+        ep = 1
+    return {
+        "is_party": params.get("party") == "1",
+        "anime_id": aid,
+        "title": params.get("title", "Anime Party"),
+        "episode": ep,
+        "timestamp_sec": int(params.get("ts", 0)),
+    }
+
+
+def calculate_studio_loyalty_index(
+    rows: list[dict[str, Any]],
+) -> dict[str, dict[str, Any]]:
+    studio_map: dict[str, dict[str, Any]] = {}
+    for r in rows:
+        # Infer studio from tag, notes, or mock mapping
+        studios = ["Ufotable", "MAPPA", "Bones", "Kyoto Animation", "Madhouse", "Wit Studio", "CloverWorks"]
+        title_lower = (r.get("title") or "").lower()
+        matched_studio = "Independent / Other"
+        for s in studios:
+            if s.lower() in title_lower or s.lower() in (r.get("notes") or "").lower():
+                matched_studio = s
+                break
+        if matched_studio not in studio_map:
+            studio_map[matched_studio] = {"titles_count": 0, "total_eps": 0, "scores": []}
+        studio_map[matched_studio]["titles_count"] += 1
+        studio_map[matched_studio]["total_eps"] += r.get("progress", 0)
+        if r.get("user_score"):
+            studio_map[matched_studio]["scores"].append(r["user_score"])
+
+    results = {}
+    for s, data in studio_map.items():
+        avg_score = round(sum(data["scores"]) / len(data["scores"]), 1) if data["scores"] else None
+        results[s] = {
+            "titles": data["titles_count"],
+            "episodes": data["total_eps"],
+            "avg_score": avg_score,
+        }
+    return results
+
+
+def calculate_seiyuu_screen_time(
+    rows: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    actor_time: dict[str, int] = {}
+    for r in rows:
+        eps = r.get("progress", 0)
+        dur = r.get("duration", 24)
+        seiyuu_list = extract_characters_and_seiyuu(r)
+        if not seiyuu_list and r.get("characters_json"):
+            try:
+                raw = json.loads(r["characters_json"])
+                if isinstance(raw, list):
+                    seiyuu_list = raw
+            except Exception:
+                pass
+        for item in seiyuu_list:
+            name = (item.get("seiyuu") or item.get("actor") or item.get("voice_actor") or "").strip()
+            if name and name != "Unknown":
+                actor_time[name] = actor_time.get(name, 0) + (eps * dur)
+
+    sorted_actors = sorted(actor_time.items(), key=lambda x: x[1], reverse=True)
+    return [{"actor": a, "hours": round(mins / 60, 1), "minutes": mins} for a, mins in sorted_actors[:10]]
+
+
+def calculate_drop_off_statistics(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    dropped = [r for r in rows if r.get("status") == "DROPPED"]
+    total = len(rows)
+    drop_count = len(dropped)
+    if not dropped:
+        return {
+            "dropped_count": 0,
+            "drop_rate_pct": 0.0,
+            "rule_of_three_pct": 0.0,
+            "median_drop_episode": 0,
+        }
+
+    three_ep_drops = sum(1 for r in dropped if r.get("progress", 0) <= 3)
+    rule_of_three_pct = round((three_ep_drops / max(1, drop_count)) * 100, 1)
+    progress_list = sorted(r.get("progress", 0) for r in dropped)
+    median_ep = progress_list[len(progress_list) // 2]
+    return {
+        "dropped_count": drop_count,
+        "drop_rate_pct": round((drop_count / max(1, total)) * 100, 1),
+        "rule_of_three_pct": rule_of_three_pct,
+        "median_drop_episode": median_ep,
+    }
+
+
+def calculate_era_distribution(rows: list[dict[str, Any]]) -> dict[str, int]:
+    era_counts = {k: 0 for k in HISTORICAL_ERAS.keys()}
+    for r in rows:
+        airing = r.get("next_airing_at") or 0
+        dt = datetime.fromtimestamp(airing) if airing > 0 else datetime.now()
+        year = dt.year
+        for era_name, (start_yr, end_yr) in HISTORICAL_ERAS.items():
+            if start_yr <= year <= end_yr:
+                era_counts[era_name] += 1
+                break
+    return era_counts
+
+
+def evaluate_pacing_alert(history: list[dict[str, Any]], weekly_goal: int = 10) -> dict[str, Any]:
+    now = datetime.now()
+    watched_last_7 = sum(
+        1 for h in history if (now - datetime.fromisoformat(h.get("watched_at", "2000-01-01"))).days <= 7
+    )
+    diff = watched_last_7 - weekly_goal
+    if diff >= 2:
+        status = "ahead"
+        tip = f"⚡ Saiyan Turbo Mode: You are {diff} episodes ahead of your weekly goal!"
+    elif diff >= -1:
+        status = "on_track"
+        tip = "🎯 Perfectly Balanced: You are right on target to hit your goal."
+    else:
+        status = "behind"
+        tip = f"💤 Time to Binge: You are {abs(diff)} episodes behind your target."
+
+    return {
+        "status": status,
+        "watched_this_week": watched_last_7,
+        "goal": weekly_goal,
+        "delta": diff,
+        "message": tip,
+    }
+
+
+def generate_custom_webhook_payload(
+    event: str, anime: dict[str, Any], username: str = "Otaku Orbit User"
+) -> dict[str, Any]:
+    title = display_title(anime) if isinstance(anime, dict) else str(anime)
+    return {
+        "event": event,
+        "timestamp": datetime.now().isoformat(),
+        "user": username,
+        "anime": {
+            "title": title,
+            "status": anime.get("status") if isinstance(anime, dict) else "COMPLETED",
+            "progress": anime.get("progress") if isinstance(anime, dict) else 12,
+            "score": anime.get("user_score") if isinstance(anime, dict) else 100,
+        },
+    }
+
+
+def generate_direct_sync_request(service: str, token: str, action: str, data: dict[str, Any]) -> dict[str, Any]:
+    service_clean = service.lower().strip()
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Content-Type": "application/json",
+        "User-Agent": f"OtakuOrbit/{APP_VERSION}",
+    }
+    url = "https://graphql.anilist.co" if service_clean == "anilist" else "https://api.myanimelist.net/v2"
+    return {
+        "method": "POST",
+        "url": url,
+        "headers": headers,
+        "action": action,
+        "payload": data,
+    }
+
+
+def prepare_gist_backup_payload(
+    rows: list[dict[str, Any]], filename: str = "otaku_orbit_backup.json"
+) -> dict[str, Any]:
+    return {
+        "description": f"Otaku Orbit Automated Database Backup v{APP_VERSION}",
+        "public": False,
+        "files": {
+            filename: {
+                "content": export_watchlist(rows),
+            }
+        },
+    }
+
+
+def generate_watchlist_rss_feed(
+    rows: list[dict[str, Any]], base_url: str = "https://otaku-orbit.streamlit.app/"
+) -> str:
+    now_rfc = datetime.now().strftime("%a, %d %b %Y %H:%M:%S +0000")
+    items = []
+    for r in rows:
+        title = html.escape(display_title(r))
+        ep = r.get("next_airing_episode") or (r.get("progress", 0) + 1)
+        airing_ts = r.get("next_airing_at") or 0
+        pub_date = (
+            datetime.fromtimestamp(airing_ts).strftime("%a, %d %b %Y %H:%M:%S +0000") if airing_ts > 0 else now_rfc
+        )
+        items.append(f"""    <item>
+      <title>{title} - Episode {ep}</title>
+      <link>{base_url}</link>
+      <guid>{base_url}#anime-{r.get("anime_id", 0)}-ep-{ep}</guid>
+      <pubDate>{pub_date}</pubDate>
+      <description>Episode {ep} broadcast update for {title}.</description>
+    </item>""")
+
+    items_block = "\n".join(items)
+    return f"""<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0">
+  <channel>
+    <title>Otaku Orbit Airing Watchlist Feed</title>
+    <link>{base_url}</link>
+    <description>Upcoming anime broadcasts tracked in Otaku Orbit.</description>
+    <lastBuildDate>{now_rfc}</lastBuildDate>
+{items_block}
+  </channel>
+</rss>"""
