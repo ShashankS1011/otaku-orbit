@@ -177,6 +177,24 @@ def init_db(owner_id: str | None = None) -> None:
             updated_at TEXT NOT NULL
         )""")
 
+        connection.execute("""CREATE TABLE IF NOT EXISTS trivia_scores (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            score INTEGER NOT NULL DEFAULT 0,
+            streak INTEGER NOT NULL DEFAULT 0,
+            last_played TEXT NOT NULL
+        )""")
+
+        connection.execute("""CREATE TABLE IF NOT EXISTS daily_quests (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            quest_id TEXT NOT NULL,
+            quest_date TEXT NOT NULL,
+            progress INTEGER NOT NULL DEFAULT 0,
+            completed INTEGER NOT NULL DEFAULT 0,
+            xp_rewarded INTEGER NOT NULL DEFAULT 0,
+            updated_at TEXT NOT NULL,
+            UNIQUE(quest_id, quest_date)
+        )""")
+
 
 def db_rows(owner_id: str | None = None) -> list[dict[str, Any]]:
     with sqlite3.connect(database_path_for_owner(owner_id), timeout=15) as connection:
@@ -758,3 +776,57 @@ def fetch_api_token(service: str, owner_id: str | None = None) -> str | None:
     with sqlite3.connect(database_path_for_owner(owner_id), timeout=15) as conn:
         row = conn.execute("SELECT token FROM api_tokens WHERE service = ?", (service.strip().lower(),)).fetchone()
         return str(row[0]) if row else None
+
+
+def record_trivia_score(points: int, correct: bool, owner_id: str | None = None) -> dict[str, Any]:
+    now = datetime.now().isoformat()
+    with sqlite3.connect(database_path_for_owner(owner_id), timeout=15) as conn:
+        conn.row_factory = sqlite3.Row
+        row = conn.execute("SELECT * FROM trivia_scores ORDER BY id DESC LIMIT 1").fetchone()
+        if row:
+            prev_score = row["score"]
+            prev_streak = row["streak"]
+            new_streak = prev_streak + 1 if correct else 0
+            new_score = prev_score + (points if correct else 0)
+            conn.execute(
+                "UPDATE trivia_scores SET score = ?, streak = ?, last_played = ? WHERE id = ?",
+                (new_score, new_streak, now, row["id"]),
+            )
+        else:
+            new_score = points if correct else 0
+            new_streak = 1 if correct else 0
+            conn.execute(
+                "INSERT INTO trivia_scores (score, streak, last_played) VALUES (?, ?, ?)",
+                (new_score, new_streak, now),
+            )
+        return {"total_score": new_score, "current_streak": new_streak, "last_played": now}
+
+
+def fetch_trivia_streak(owner_id: str | None = None) -> dict[str, Any]:
+    with sqlite3.connect(database_path_for_owner(owner_id), timeout=15) as conn:
+        conn.row_factory = sqlite3.Row
+        row = conn.execute("SELECT * FROM trivia_scores ORDER BY id DESC LIMIT 1").fetchone()
+        if row:
+            return {"total_score": row["score"], "current_streak": row["streak"], "last_played": row["last_played"]}
+        return {"total_score": 0, "current_streak": 0, "last_played": None}
+
+
+def record_quest_progress(quest_id: str, delta: int = 1, owner_id: str | None = None) -> None:
+    today_str = date.today().isoformat()
+    now_ts = datetime.now().isoformat()
+    with sqlite3.connect(database_path_for_owner(owner_id), timeout=15) as conn:
+        conn.execute(
+            """INSERT INTO daily_quests (quest_id, quest_date, progress, completed, xp_rewarded, updated_at)
+            VALUES (?, ?, ?, 0, 0, ?)
+            ON CONFLICT(quest_id, quest_date) DO UPDATE SET
+            progress = progress + excluded.progress, updated_at = excluded.updated_at""",
+            (quest_id, today_str, delta, now_ts),
+        )
+
+
+def fetch_daily_quest_states(owner_id: str | None = None) -> list[dict[str, Any]]:
+    today_str = date.today().isoformat()
+    with sqlite3.connect(database_path_for_owner(owner_id), timeout=15) as conn:
+        conn.row_factory = sqlite3.Row
+        rows = conn.execute("SELECT * FROM daily_quests WHERE quest_date = ?", (today_str,)).fetchall()
+        return [dict(r) for r in rows]

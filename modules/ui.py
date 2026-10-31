@@ -47,13 +47,16 @@ from modules.db import (
     update_progress,
 )
 from modules.services import (
+    audit_watchlist_decay,
     banner_image_url,
     build_seiyuu_character_matrix,
     calculate_drop_off_statistics,
     calculate_era_distribution,
     calculate_runtime_display,
     calculate_seiyuu_screen_time,
+    calculate_speed_adjusted_runtime,
     calculate_studio_loyalty_index,
+    calculate_time_equivalence_milestones,
     calculate_user_taste_compatibility,
     calculate_watch_streak,
     calculate_watch_velocity,
@@ -64,6 +67,7 @@ from modules.services import (
     estimate_completion_date,
     evaluate_achievements,
     evaluate_bingo_card,
+    evaluate_trivia_answer,
     export_kitsu_json,
     export_simkl_csv,
     export_watchlist,
@@ -82,14 +86,19 @@ from modules.services import (
     generate_anime_wrapped_svg,
     generate_bujo_tracker_html,
     generate_bujo_tracker_markdown,
+    generate_daily_trivia_question,
     generate_music_links,
     generate_otaku_passport_svg,
     generate_watchlist_rss_feed,
+    get_character_quote,
     get_filler_guide,
     get_franchise_watch_order,
+    get_manga_chapter_sync,
     get_theme_video_links,
     pick_random_backlog,
+    plan_binge_schedule,
     rank_recommendations,
+    render_lofi_player_html,
 )
 
 
@@ -205,6 +214,16 @@ def show_anime_details(anime_id: int) -> None:
         st.divider()
         st.subheader("🎬 Key Production Staff & Directors")
         st.write(", ".join(f"**{m['name']}** ({m['role']})" for m in staff_members[:6]))
+
+    quote_data = get_character_quote(title)
+    if quote_data:
+        st.divider()
+        st.markdown(f'> 🗣️ **"{quote_data["quote"]}"**')
+        st.caption(f"— **{quote_data['character']}** (*{quote_data['anime']}*) · {quote_data['context']}")
+
+    manga_sync = get_manga_chapter_sync(title, anime.get("episodes") or 1)
+    if manga_sync:
+        st.info(f"📖 **Manga Chapter Sync:** {manga_sync['note']}")
 
     filler_guide = get_filler_guide(title)
     if filler_guide:
@@ -683,6 +702,54 @@ def render_analytics(rows: list[dict[str, Any]], owner_id: str | None = None) ->
         for era_name, count in eras.items():
             st.write(f"**{era_name}**: {count} titles")
 
+    with st.expander("⚔️ Anime Trivia Battle & Daily Quiz", expanded=False):
+        t_q = generate_daily_trivia_question()
+        st.markdown(f"### {t_q['question']}")
+        st.caption(f"Difficulty: {t_q['difficulty']}")
+        chosen_opt = st.radio("Choose your answer:", t_q["options"], key=f"trivia_opt_{t_q['id']}")
+        if st.button("Submit Answer", key=f"trivia_submit_{t_q['id']}"):
+            res = evaluate_trivia_answer(t_q["id"], chosen_opt)
+            if res["correct"]:
+                st.success(f"✨ Correct! +{res['points']} XP. {res['explanation']}")
+            else:
+                st.error(f"❌ Incorrect. The correct answer was **{res['correct_answer']}**. {res['explanation']}")
+
+    with st.expander("⏱️ Binge Time Budget Planner", expanded=False):
+        st.caption("How much free time do you have tonight? We'll plan your perfect anime session:")
+        b_col1, b_col2 = st.columns([2, 1])
+        avail_hrs = b_col1.number_input(
+            "Available Free Time (Hours)", min_value=0.5, max_value=24.0, value=2.0, step=0.5
+        )
+        if b_col2.button("Compute Session Plan", use_container_width=True):
+            plan = plan_binge_schedule(rows, int(avail_hrs * 60))
+            if plan["schedule"]:
+                st.success(
+                    f"🎯 Planned **{plan['planned_episodes']} episodes** across {plan['total_minutes']} minutes!"
+                )
+                for s in plan["schedule"]:
+                    st.write(
+                        f"• **{s['title']}** (Episodes {s['episode_start']} - {s['episode_end']}) · {s['duration_minutes']} mins"
+                    )
+            else:
+                st.info("No queued titles fit into this window. Try adding titles or increasing your budget.")
+
+    with st.expander("⏩ Playback Speed Runtime Calculator", expanded=False):
+        total_time_mins = sum(r.get("progress", 0) * (r.get("duration") or 24) for r in rows)
+        s_col1, s_col2 = st.columns([2, 1])
+        speed_factor = s_col1.select_slider("Playback Speed", options=[1.0, 1.25, 1.5, 1.75, 2.0], value=1.25)
+        speed_res = calculate_speed_adjusted_runtime(total_time_mins, speed_factor)
+        st.write(
+            f"At **{speed_factor}x speed**, your total logged watch time reduces from **{speed_res['original_hours']}h** to **{speed_res['adjusted_hours']}h** (Saved: **{speed_res['hours_saved']} hours** / {speed_res['percentage_saved']}%)."
+        )
+
+    with st.expander("🌍 Real-World Time Equivalence Milestones", expanded=False):
+        tot_hrs = sum(r.get("progress", 0) * (r.get("duration") or 24) for r in rows) // 60
+        st.caption(f"What could you have done with your {tot_hrs} hours of anime viewing?")
+        milestones = calculate_time_equivalence_milestones(tot_hrs)
+        for m in milestones:
+            st.write(f"{m['icon']} **{m['milestone']}** ({m['percentage']}% completed)")
+            st.progress(min(1.0, m["progress_ratio"]))
+
     render_tier_list_maker(rows)
 
 
@@ -1106,6 +1173,19 @@ def render_settings(owner_id: str | None = None) -> None:
         - `w` : Switch between Anime and Manga modes
         - `?` : Open shortcuts cheatsheet
         """)
+
+    with st.expander("🧹 Watchlist Spring Cleaning & Decay Audit"):
+        decay_res = audit_watchlist_decay(db_rows(owner_id))
+        st.write(decay_res["recommendation"])
+        if decay_res["stale_titles"]:
+            for item in decay_res["stale_titles"][:6]:
+                st.write(
+                    f"• **{item['title']}** ({item['status']}) — dormant for {item['inactive_days']} days (~{item['estimated_hours']} hrs)"
+                )
+
+    with st.expander("🎧 Ambient Anime Lo-Fi Radio Player"):
+        st.caption("Listen to peaceful anime lo-fi beats while organizing your watchlist:")
+        st.markdown(render_lofi_player_html(0), unsafe_allow_html=True)
 
     with st.expander("Progressive Web App (PWA) & Offline Setup"):
         st.caption("Install Otaku Orbit directly to your phone or desktop home screen:")

@@ -9,22 +9,31 @@ import re
 import time
 from datetime import date, datetime, timedelta
 from typing import Any
-from urllib.parse import quote, urlparse
+from urllib.parse import parse_qs, quote, urlparse
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from modules.config import (
     ACHIEVEMENTS,
     ANIME_ARCHETYPES,
+    ANIME_LOFI_STREAMS,
     ANIME_MOODS,
     APP_URL,
     APP_VERSION,
     BACKUP_FORMAT_VERSION,
     BINGO_CHALLENGES,
+    CHARACTER_QUOTES,
     CHARACTER_TROPES,
+    DAILY_QUESTS_TEMPLATE,
     FILLER_GUIDES,
+    FRANCHISE_ARCS,
     FRANCHISE_WATCH_ORDERS,
+    GLOBAL_GENRE_BENCHMARKS,
     HISTORICAL_ERAS,
+    MANGA_ANIME_SYNC_MAP,
+    OST_QUIZ_BANK,
     TIER_LIST_TEMPLATES,
+    TIME_EQUIVALENCE_RATES,
+    TRIVIA_QUESTION_BANK,
 )
 
 
@@ -1670,3 +1679,464 @@ def generate_watchlist_rss_feed(
 {items_block}
   </channel>
 </rss>"""
+
+
+def generate_daily_trivia_question(seed: int | None = None) -> dict[str, Any]:
+    if seed is not None:
+        idx = seed % len(TRIVIA_QUESTION_BANK)
+    else:
+        # Default to day-of-year deterministic question
+        idx = datetime.now().timetuple().tm_yday % len(TRIVIA_QUESTION_BANK)
+    return TRIVIA_QUESTION_BANK[idx]
+
+
+def evaluate_trivia_answer(question_id: int, selected_option: str) -> dict[str, Any]:
+    q = next((item for item in TRIVIA_QUESTION_BANK if item["id"] == question_id), None)
+    if not q:
+        return {"correct": False, "points": 0, "explanation": "Unknown question."}
+    is_correct = q["answer"].strip().lower() == selected_option.strip().lower()
+    points = 50 if is_correct else 0
+    return {
+        "correct": is_correct,
+        "points": points,
+        "correct_answer": q["answer"],
+        "explanation": q["explanation"],
+    }
+
+
+def generate_ost_quiz_question(seed: int | None = None) -> dict[str, Any]:
+    idx = (seed if seed is not None else datetime.now().timetuple().tm_yday) % len(OST_QUIZ_BANK)
+    return OST_QUIZ_BANK[idx]
+
+
+def evaluate_ost_quiz_answer(song_title: str, selected_anime: str) -> dict[str, Any]:
+    q = next((item for item in OST_QUIZ_BANK if item["song_title"].lower() == song_title.lower()), None)
+    if not q:
+        return {"correct": False, "points": 0, "correct_answer": "Unknown"}
+    is_correct = q["answer"].strip().lower() == selected_anime.strip().lower()
+    return {
+        "correct": is_correct,
+        "points": 50 if is_correct else 0,
+        "correct_answer": q["answer"],
+    }
+
+
+def generate_daily_quests(
+    db_quest_rows: list[dict[str, Any]] | None = None,
+) -> list[dict[str, Any]]:
+    lookup = {r["quest_id"]: r for r in (db_quest_rows or [])}
+    quests = []
+    for t in DAILY_QUESTS_TEMPLATE:
+        qid = t["id"]
+        saved = lookup.get(qid, {})
+        cur_prog = saved.get("progress", 0)
+        target = t["target"]
+        is_done = cur_prog >= target
+        quests.append(
+            {
+                "id": qid,
+                "title": t["title"],
+                "desc": t["desc"],
+                "progress": cur_prog,
+                "target": target,
+                "xp": t["xp"],
+                "completed": is_done,
+            }
+        )
+    return quests
+
+
+def check_quest_completion(quest_id: str, current_progress: int) -> bool:
+    t = next((item for item in DAILY_QUESTS_TEMPLATE if item["id"] == quest_id), None)
+    if not t:
+        return False
+    return current_progress >= t["target"]
+
+
+def generate_web_share_html(title: str, text: str, url: str) -> str:
+    safe_title = html.escape(title)
+    safe_text = html.escape(text)
+    safe_url = html.escape(url)
+    return f"""<div style="margin: 0.8rem 0;">
+  <button onclick="if(navigator.share){{navigator.share({{title:'{safe_title}',text:'{safe_text}',url:'{safe_url}'}})}}else{{navigator.clipboard.writeText('{safe_url}');alert('Link copied to clipboard!');}}"
+    style="background:linear-gradient(135deg,#6f4cff,#f4b8ff);color:#fff;border:none;border-radius:12px;padding:8px 16px;font-weight:700;cursor:pointer;box-shadow:0 4px 14px rgba(111,76,255,0.4);">
+    📲 Share Otaku Dossier
+  </button>
+</div>"""
+
+
+def plan_binge_schedule(rows: list[dict[str, Any]], available_minutes: int) -> dict[str, Any]:
+    active = [r for r in rows if r.get("status") in {"WATCHING", "REWATCHING", "PLANNING"}]
+    if not active:
+        active = list(rows)
+    if not active or available_minutes <= 0:
+        return {"planned_episodes": 0, "total_minutes": 0, "schedule": []}
+
+    remaining = available_minutes
+    schedule: list[dict[str, Any]] = []
+    total_episodes = 0
+
+    for item in active:
+        dur = item.get("duration") or 24
+        cur_prog = item.get("progress", 0)
+        tot_eps = item.get("episodes") or 12
+        avail_eps = max(1, tot_eps - cur_prog)
+
+        if remaining < dur:
+            continue
+
+        eps_to_watch = min(avail_eps, remaining // dur)
+        if eps_to_watch > 0:
+            spent = eps_to_watch * dur
+            schedule.append(
+                {
+                    "anime_id": item.get("anime_id"),
+                    "title": display_title(item),
+                    "episodes_to_watch": eps_to_watch,
+                    "episode_start": cur_prog + 1,
+                    "episode_end": cur_prog + eps_to_watch,
+                    "duration_minutes": spent,
+                }
+            )
+            remaining -= spent
+            total_episodes += eps_to_watch
+
+    return {
+        "planned_episodes": total_episodes,
+        "total_minutes": available_minutes - remaining,
+        "remaining_budget": remaining,
+        "schedule": schedule,
+    }
+
+
+def calculate_speed_adjusted_runtime(total_minutes: int, speed: float = 1.0) -> dict[str, Any]:
+    playback_speed = max(0.5, min(3.0, speed))
+    adjusted_mins = int(total_minutes / playback_speed)
+    saved_mins = max(0, total_minutes - adjusted_mins)
+    pct_saved = round((saved_mins / max(1, total_minutes)) * 100, 1) if total_minutes > 0 else 0.0
+    return {
+        "original_minutes": total_minutes,
+        "original_hours": round(total_minutes / 60, 1),
+        "playback_speed": playback_speed,
+        "adjusted_minutes": adjusted_mins,
+        "adjusted_hours": round(adjusted_mins / 60, 1),
+        "minutes_saved": saved_mins,
+        "hours_saved": round(saved_mins / 60, 1),
+        "percentage_saved": pct_saved,
+    }
+
+
+def get_manga_chapter_sync(anime_title: str, current_episode: int) -> dict[str, Any] | None:
+    norm = anime_title.strip().lower()
+    for series, data in MANGA_ANIME_SYNC_MAP.items():
+        if series.lower() in norm or norm in series.lower():
+            ch = data["formula"](current_episode)
+            return {
+                "series": series,
+                "manga_title": data["manga_title"],
+                "source": data["source"],
+                "current_episode": current_episode,
+                "estimated_chapter": ch,
+                "note": f"Episode {current_episode} corresponds approximately to Chapter {ch} in the official manga.",
+            }
+    return None
+
+
+def audit_watchlist_decay(rows: list[dict[str, Any]], decay_days: int = 180) -> dict[str, Any]:
+    now = datetime.now()
+    stale_items = []
+    potential_hours = 0
+    for r in rows:
+        if r.get("status") in {"PLANNING", "DROPPED"}:
+            updated_str = r.get("updated_at")
+            if updated_str:
+                try:
+                    updated_dt = datetime.fromisoformat(updated_str)
+                    age_days = (now - updated_dt).days
+                    if age_days >= decay_days:
+                        dur = r.get("duration") or 24
+                        eps = r.get("episodes") or 12
+                        hrs = (eps * dur) // 60
+                        potential_hours += hrs
+                        stale_items.append(
+                            {
+                                "anime_id": r.get("anime_id"),
+                                "title": display_title(r),
+                                "status": r.get("status"),
+                                "inactive_days": age_days,
+                                "estimated_hours": hrs,
+                            }
+                        )
+                except Exception:
+                    pass
+
+    return {
+        "decay_threshold_days": decay_days,
+        "stale_count": len(stale_items),
+        "potential_hours_saved": potential_hours,
+        "stale_titles": stale_items,
+        "recommendation": f"You have {len(stale_items)} titles dormant for >{decay_days} days. Purging them frees up {potential_hours} hours of backlog pressure!",
+    }
+
+
+def render_lofi_player_html(stream_index: int = 0) -> str:
+    idx = stream_index % len(ANIME_LOFI_STREAMS)
+    stream = ANIME_LOFI_STREAMS[idx]
+    return f"""<div style="border-radius:16px;overflow:hidden;border:1px solid rgba(244,184,255,0.2);box-shadow:0 8px 24px rgba(0,0,0,0.3);background:#120e24;">
+  <div style="padding:10px 16px;background:rgba(255,255,255,0.03);color:#f4b8ff;font-weight:bold;font-size:0.85rem;">
+    🎧 Ambient Anime Lo-Fi Radio: {stream["title"]}
+  </div>
+  <iframe width="100%" height="180" src="{stream["stream_url"]}" title="{stream["title"]}" frameborder="0" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture" allowfullscreen></iframe>
+</div>"""
+
+
+def generate_trailer_theater_embed(trailer_url: str, title: str = "Anime") -> str:
+    parsed = urlparse(trailer_url)
+    hostname = (parsed.hostname or "").lower()
+    if hostname in {"www.youtube.com", "youtube.com", "m.youtube.com", "youtu.be"} or hostname.endswith(".youtube.com"):
+        vid_id = ""
+        if "watch" in parsed.path:
+            query = parse_qs(parsed.query)
+            if "v" in query and query["v"]:
+                vid_id = query["v"][0]
+        elif hostname == "youtu.be":
+            vid_id = parsed.path.lstrip("/").split("/")[0]
+        elif "/embed/" in parsed.path:
+            vid_id = parsed.path.split("/embed/")[-1].split("/")[0]
+
+        if vid_id and re.match(r"^[A-Za-z0-9_-]{6,15}$", vid_id):
+            embed_url = f"https://www.youtube.com/embed/{vid_id}?autoplay=1&mute=0"
+            return f"""<div style="border-radius:20px;overflow:hidden;border:1px solid rgba(244,184,255,0.3);box-shadow:0 12px 36px rgba(0,0,0,0.5);">
+  <iframe width="100%" height="450" src="{embed_url}" title="{title} Trailer" frameborder="0" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture" allowfullscreen></iframe>
+</div>"""
+    return f'<p><a href="{trailer_url}" target="_blank">▶️ Watch Trailer on YouTube</a></p>'
+
+
+def generate_wallpaper_poster_svg(anime: dict[str, Any], orientation: str = "landscape") -> str:
+    title = display_title(anime)
+    score = anime.get("averageScore") or anime.get("score") or 90
+    genres = anime.get("genres") or "Action, Adventure"
+    if isinstance(genres, list):
+        genres = ", ".join(genres)
+
+    if orientation == "portrait":
+        w, h = 1080, 1920
+        title_y, bar_y = 1500, 1600
+    else:
+        w, h = 1920, 1080
+        title_y, bar_y = 750, 850
+
+    return f"""<svg xmlns="http://www.w3.org/2000/svg" width="{w}" height="{h}" viewBox="0 0 {w} {h}">
+  <defs>
+    <radialGradient id="wallGlow" cx="50%" cy="40%" r="60%">
+      <stop offset="0%" stop-color="#4a2b82"/>
+      <stop offset="60%" stop-color="#120c24"/>
+      <stop offset="100%" stop-color="#07050d"/>
+    </radialGradient>
+    <linearGradient id="neonText" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#f4b8ff"/>
+      <stop offset="100%" stop-color="#00f0ff"/>
+    </linearGradient>
+  </defs>
+  <rect width="{w}" height="{h}" fill="url(#wallGlow)"/>
+  <circle cx="{w // 2}" cy="{h // 2 - 100}" r="280" fill="rgba(111,76,255,0.18)" filter="blur(60px)"/>
+  
+  <text x="120" y="{title_y}" font-family="'Segoe UI', Roboto, sans-serif" font-size="72" font-weight="900" fill="url(#neonText)">{title.upper()}</text>
+  <text x="120" y="{bar_y}" font-family="'Segoe UI', Roboto, sans-serif" font-size="32" fill="#8c89a0" letter-spacing="4">{genres.upper()} · ⭐ {score}% COMMUNITY RATING</text>
+  <text x="120" y="{bar_y + 60}" font-family="'Segoe UI', Roboto, sans-serif" font-size="24" fill="#00ff88" letter-spacing="2">OTAKU ORBIT ARTWORK COLLECTOR · v{APP_VERSION}</text>
+</svg>"""
+
+
+def get_character_quote(
+    anime_title_or_character: str | None = None,
+) -> dict[str, str]:
+    if anime_title_or_character:
+        q_norm = anime_title_or_character.strip().lower()
+        for item in CHARACTER_QUOTES:
+            if q_norm in item["character"].lower() or q_norm in item["anime"].lower():
+                return item
+    idx = datetime.now().timetuple().tm_yday % len(CHARACTER_QUOTES)
+    return CHARACTER_QUOTES[idx]
+
+
+def generate_arc_progression_data(franchise_name: str) -> list[dict[str, Any]]:
+    norm = franchise_name.strip().lower()
+    for series, arcs in FRANCHISE_ARCS.items():
+        if series.lower() in norm or norm in series.lower():
+            return arcs
+    return []
+
+
+def calculate_genre_radar_metrics(
+    rows: list[dict[str, Any]],
+) -> dict[str, dict[str, float]]:
+    user_counts: dict[str, int] = {}
+    total_tags = 0
+    for r in rows:
+        genres = r.get("genres", "")
+        if isinstance(genres, str):
+            genres_list = [g.strip() for g in genres.split(",") if g.strip()]
+        else:
+            genres_list = [g for g in genres if g]
+        for g in genres_list:
+            user_counts[g] = user_counts.get(g, 0) + 1
+            total_tags += 1
+
+    comparison: dict[str, dict[str, float]] = {}
+    for genre, benchmark in GLOBAL_GENRE_BENCHMARKS.items():
+        u_count = user_counts.get(genre, 0)
+        u_pct = round((u_count / max(1, total_tags)) * 100, 1)
+        comparison[genre] = {
+            "user_pct": u_pct,
+            "global_benchmark_pct": benchmark,
+            "affinity_delta": round(u_pct - benchmark, 1),
+        }
+    return comparison
+
+
+def calculate_time_equivalence_milestones(
+    total_hours: int,
+) -> list[dict[str, Any]]:
+    milestones = []
+    for item in TIME_EQUIVALENCE_RATES:
+        req = item["hours_required"]
+        progress_ratio = round(total_hours / req, 2)
+        milestones.append(
+            {
+                "milestone": item["milestone"],
+                "hours_required": req,
+                "icon": item["icon"],
+                "progress_ratio": progress_ratio,
+                "completed": total_hours >= req,
+                "percentage": min(100, int(progress_ratio * 100)),
+            }
+        )
+    return milestones
+
+
+def build_voice_actor_network(
+    rows: list[dict[str, Any]],
+) -> dict[str, Any]:
+    matrix = build_seiyuu_character_matrix(rows)
+    nodes = [{"id": actor, "name": actor, "roles_count": len(roles)} for actor, roles in matrix.items()]
+    edges = []
+    actors = list(matrix.keys())
+    for i in range(len(actors)):
+        for j in range(i + 1, len(actors)):
+            a1, a2 = actors[i], actors[j]
+            anime_set1 = {r["anime"] for r in matrix[a1]}
+            anime_set2 = {r["anime"] for r in matrix[a2]}
+            common = anime_set1.intersection(anime_set2)
+            if common:
+                edges.append(
+                    {
+                        "source": a1,
+                        "target": a2,
+                        "shared_anime_count": len(common),
+                        "shared_titles": list(common),
+                    }
+                )
+    return {"nodes": nodes, "edges": edges, "links": edges}
+
+
+def handle_headless_request(
+    method: str,
+    path: str = "",
+    params: dict[str, Any] | None = None,
+    body: dict[str, Any] | None = None,
+    owner_id: str | None = None,
+) -> dict[str, Any]:
+    from modules.db import db_rows, increment_watchlist_progress
+
+    if " " in method and not path:
+        parts = method.strip().split(maxsplit=1)
+        method = parts[0]
+        path = parts[1]
+
+    params = params or {}
+    clean_path = path.strip().lower()
+
+    if clean_path in {"/api/v1/health", "/health"}:
+        return {"status": 200, "data": {"status": "ok", "version": APP_VERSION}}
+
+    if clean_path in {"/api/v1/watchlist", "/watchlist"}:
+        rows = db_rows(owner_id)
+        return {"status": 200, "count": len(rows), "data": rows}
+
+    if clean_path in {"/api/v1/stats", "/stats"}:
+        rows = db_rows(owner_id)
+        total_eps = sum(r.get("progress", 0) for r in rows)
+        return {
+            "status": 200,
+            "data": {
+                "total_titles": len(rows),
+                "total_episodes": total_eps,
+                "version": APP_VERSION,
+            },
+        }
+
+    if clean_path in {"/api/v1/progress/increment", "/increment"} and method.upper() == "POST":
+        anime_id = (body or {}).get("anime_id") or params.get("anime_id")
+        if not anime_id:
+            return {"status": 400, "error": "Missing anime_id parameter"}
+        try:
+            new_prog = increment_watchlist_progress(int(anime_id), owner_id)
+            return {"status": 200, "anime_id": anime_id, "new_progress": new_prog}
+        except Exception as err:
+            return {"status": 500, "error": str(err)}
+
+    return {"status": 404, "error": f"Endpoint {path} not found"}
+
+
+def verify_visual_glassmorphism_contract(html_content: str) -> dict[str, bool]:
+    return {
+        "has_backdrop_blur": "backdrop-filter: blur" in html_content or "backdrop-blur" in html_content,
+        "has_border_radius": "border-radius:" in html_content,
+        "has_glow_or_gradient": "rgba(" in html_content
+        or "linear-gradient" in html_content
+        or "radial-gradient" in html_content,
+    }
+
+
+def prepare_s3_backup_payload(rows: list[dict[str, Any]], bucket: str = "otaku-orbit-backups") -> dict[str, Any]:
+    data_json = export_watchlist(rows)
+    key = f"backups/otaku_orbit_v{APP_VERSION}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
+    return {
+        "bucket": bucket,
+        "key": key,
+        "content_type": "application/json",
+        "body": data_json,
+        "content_length": len(data_json.encode("utf-8")),
+    }
+
+
+def generate_indexeddb_mirror_js(rows: list[dict[str, Any]]) -> str:
+    payload = json.dumps(
+        [
+            {
+                "id": r.get("anime_id"),
+                "title": display_title(r),
+                "progress": r.get("progress", 0),
+                "status": r.get("status"),
+            }
+            for r in rows
+        ]
+    )
+    return f"""// Otaku Orbit v{APP_VERSION} Client-side IndexedDB Mirror
+(function() {{
+  const request = indexedDB.open('otaku_orbit_db', 1);
+  request.onupgradeneeded = function(e) {{
+    const db = e.target.result;
+    if (!db.objectStoreNames.contains('watchlist')) {{
+      db.createObjectStore('watchlist', {{ keyPath: 'id' }});
+    }}
+  }};
+  request.onsuccess = function(e) {{
+    const db = e.target.result;
+    const tx = db.transaction('watchlist', 'readwrite');
+    const store = tx.objectStore('watchlist');
+    const data = {payload};
+    data.forEach(item => store.put(item));
+    console.log('[OtakuOrbit] Mirrored ' + data.length + ' titles to local IndexedDB.');
+  }};
+}})();"""

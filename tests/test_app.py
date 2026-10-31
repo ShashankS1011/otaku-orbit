@@ -838,7 +838,7 @@ def test_modular_package_exports():
     assert hasattr(modules, "anilist_query")
     assert hasattr(modules, "calculate_watch_streak")
     assert hasattr(modules, "render_watchlist")
-    assert modules.APP_VERSION == "1.9.0"
+    assert modules.APP_VERSION == "2.0.0"
 
 
 def test_composite_database_indices(isolated_db):
@@ -1562,3 +1562,221 @@ def test_v19_direct_sync_gist_and_rss():
     assert "<?xml" in rss
     assert '<rss version="2.0">' in rss
     assert "RSS Show - Episode 2" in rss
+
+
+def test_v20_daily_trivia_and_ost_quiz(isolated_db):
+    import app
+    from modules.db import fetch_trivia_streak, record_trivia_score
+    from modules.services import (
+        evaluate_ost_quiz_answer,
+        evaluate_trivia_answer,
+        generate_daily_trivia_question,
+        generate_ost_quiz_question,
+    )
+
+    app.init_db("test_owner")
+    t = generate_daily_trivia_question()
+    assert "question" in t
+    assert "options" in t
+    res_correct = evaluate_trivia_answer(t["id"], t["answer"])
+    assert res_correct["correct"] is True
+    assert res_correct["points"] == 50
+
+    res_incorrect = evaluate_trivia_answer(t["id"], "Completely Wrong Option 999")
+    assert res_incorrect["correct"] is False
+    assert res_incorrect["points"] == 0
+
+    score_res = record_trivia_score(50, True, owner_id="test_owner")
+    assert score_res["current_streak"] == 1
+    assert score_res["total_score"] == 50
+
+    streak = fetch_trivia_streak(owner_id="test_owner")
+    assert streak["current_streak"] == 1
+    assert streak["total_score"] == 50
+
+    ost = generate_ost_quiz_question()
+    assert "song_title" in ost
+    assert "options" in ost
+    ost_res = evaluate_ost_quiz_answer(ost["song_title"], ost["answer"])
+    assert ost_res["correct"] is True
+    assert ost_res["points"] == 50
+
+
+def test_v20_daily_quests_and_completion(isolated_db):
+    import app
+    from modules.db import fetch_daily_quest_states, record_quest_progress
+    from modules.services import check_quest_completion, generate_daily_quests
+
+    app.init_db("test_owner")
+    quests = generate_daily_quests()
+    assert len(quests) >= 3
+
+    record_quest_progress("quest_watch_ep", 1, owner_id="test_owner")
+    states = fetch_daily_quest_states(owner_id="test_owner")
+    assert any(s["quest_id"] == "quest_watch_ep" for s in states)
+
+    assert check_quest_completion("quest_watch_ep", current_progress=1) is True
+
+
+def test_v20_binge_planner_and_speed_calculator():
+    from modules.services import (
+        calculate_speed_adjusted_runtime,
+        plan_binge_schedule,
+    )
+
+    rows = [
+        {"title": "Show 1", "duration": 24, "progress": 0, "episodes": 12, "status": "WATCHING"},
+        {"title": "Show 2", "duration": 24, "progress": 0, "episodes": 12, "status": "WATCHING"},
+    ]
+    binge = plan_binge_schedule(rows, available_minutes=120)
+    assert binge["planned_episodes"] == 5
+    assert binge["total_minutes"] == 120
+
+    speed = calculate_speed_adjusted_runtime(120, 1.5)
+    assert speed["adjusted_minutes"] == 80
+    assert speed["minutes_saved"] == 40
+    assert speed["playback_speed"] == 1.5
+
+
+def test_v20_manga_sync_and_watchlist_decay():
+    from modules.services import (
+        audit_watchlist_decay,
+        get_manga_chapter_sync,
+    )
+
+    sync = get_manga_chapter_sync("Frieren: Beyond Journey's End", current_episode=28)
+    assert sync is not None
+    assert sync["estimated_chapter"] == 58
+    assert "manga" in sync["note"].lower()
+
+    none_sync = get_manga_chapter_sync("Nonexistent Anime Title XYZ", current_episode=1)
+    assert none_sync is None
+
+    stagnant_rows = [
+        {
+            "title": "Stagnant Show",
+            "updated_at": "2020-01-01 00:00:00",
+            "status": "PLANNING",
+            "progress": 0,
+            "duration": 24,
+            "episodes": 12,
+        },
+        {
+            "title": "Active Show",
+            "updated_at": "2026-10-31 00:00:00",
+            "status": "PLANNING",
+            "progress": 0,
+            "duration": 24,
+            "episodes": 12,
+        },
+    ]
+    decay = audit_watchlist_decay(stagnant_rows, decay_days=60)
+    assert decay["stale_count"] == 1
+    assert decay["stale_titles"][0]["title"] == "Stagnant Show"
+
+
+def test_v20_lofi_player_and_trailer_embed():
+    from modules.services import (
+        generate_trailer_theater_embed,
+        render_lofi_player_html,
+    )
+
+    player = render_lofi_player_html(stream_index=0)
+    assert "<iframe" in player
+    assert "youtube.com/embed" in player
+
+    theater = generate_trailer_theater_embed("https://www.youtube.com/watch?v=dQw4w9WgXcQ", "Never Gonna Give You Up")
+    assert "dQw4w9WgXcQ" in theater
+    assert "allowfullscreen" in theater
+
+
+def test_v20_wallpaper_poster_and_quotes():
+    from modules.services import (
+        generate_wallpaper_poster_svg,
+        get_character_quote,
+    )
+
+    svg = generate_wallpaper_poster_svg(
+        {"title": "Frieren", "score": 91, "genres": "Fantasy, Adventure"}, orientation="landscape"
+    )
+    assert "<svg" in svg
+    assert "FRIEREN" in svg
+
+    quote = get_character_quote("Frieren")
+    assert "character" in quote
+    assert "quote" in quote
+
+
+def test_v20_arc_progression_and_genre_radar():
+    from modules.services import (
+        calculate_genre_radar_metrics,
+        generate_arc_progression_data,
+    )
+
+    arc = generate_arc_progression_data("Hunter x Hunter")
+    assert len(arc) > 0
+    assert "name" in arc[0]
+
+    radar = calculate_genre_radar_metrics(
+        [
+            {"genres": "Action, Fantasy", "score": 90},
+            {"genres": "Fantasy, Adventure", "score": 85},
+        ]
+    )
+    assert "Fantasy" in radar
+    assert radar["Fantasy"]["user_pct"] == 50.0
+
+
+def test_v20_time_milestones_and_voice_actors():
+    from modules.services import (
+        build_voice_actor_network,
+        calculate_time_equivalence_milestones,
+    )
+
+    milestones = calculate_time_equivalence_milestones(total_hours=120)
+    assert len(milestones) > 0
+    assert any(
+        "flight" in m["milestone"].lower() or "book" in m["milestone"].lower() or "orbit" in m["milestone"].lower()
+        for m in milestones
+    )
+
+    network = build_voice_actor_network(
+        [
+            {"title": "Show A", "characters_json": json.dumps([{"voice_actor": "Aoi Yuuki", "character": "Maomao"}])},
+            {"title": "Show B", "characters_json": json.dumps([{"voice_actor": "Aoi Yuuki", "character": "Tanya"}])},
+        ]
+    )
+    assert "nodes" in network
+    assert "links" in network
+    assert any(n["name"] == "Aoi Yuuki" for n in network["nodes"])
+
+
+def test_v20_headless_api_and_cloud_sync(isolated_db):
+    import app
+    from modules.services import (
+        generate_indexeddb_mirror_js,
+        generate_web_share_html,
+        handle_headless_request,
+        prepare_s3_backup_payload,
+    )
+
+    app.init_db("test_owner")
+    health = handle_headless_request("GET /api/v1/health")
+    assert health["status"] == 200
+    assert health["data"]["version"] == "2.0.0"
+
+    watchlist_req = handle_headless_request("GET", "/api/v1/watchlist", owner_id="test_owner")
+    assert watchlist_req["status"] == 200
+    assert isinstance(watchlist_req["data"], list)
+
+    s3_payload = prepare_s3_backup_payload([{"title": "S3 Show"}], bucket="otaku-backups")
+    assert s3_payload["bucket"] == "otaku-backups"
+    assert "key" in s3_payload
+    assert "body" in s3_payload
+
+    idb_js = generate_indexeddb_mirror_js([{"title": "IDB Show"}])
+    assert "indexedDB" in idb_js
+    assert "IDB Show" in idb_js
+
+    share_html = generate_web_share_html("Otaku Orbit", "My Anime List", "https://otaku-orbit.streamlit.app/")
+    assert "navigator.share" in share_html

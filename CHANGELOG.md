@@ -1,5 +1,28 @@
 # Changelog
 
+## 2.0.0
+
+- Add Daily Otaku Trivia Battle (`TRIVIA_QUESTION_BANK`, `generate_daily_trivia_question`, `evaluate_trivia_answer`, `record_trivia_score`, `fetch_trivia_streak`) with deterministic daily questions, multi-choice answer validation, score accumulation, and streak tracking.
+- Add OST Quiz / Blind Audio Challenge (`OST_QUIZ_BANK`, `generate_ost_quiz_question`, `evaluate_ost_quiz_answer`) featuring iconic anime theme song matching and interactive UI trivia games.
+- Add Daily & Weekly Otaku Quests (`DAILY_QUESTS_TEMPLATE`, `generate_daily_quests`, `record_quest_progress`, `fetch_daily_quest_states`, `check_quest_completion`) delivering gamified daily tracking goals and XP rewards.
+- Add Native Web Share API Integration (`generate_web_share_html`) enabling one-tap native mobile sharing of watchlists and recommendations.
+- Add Binge Budget Planner (`plan_binge_schedule`) calculating exact episode allotments fitting user daily or weekly free-time budgets.
+- Add Playback Speed Adjusted Watchtime Calculator (`calculate_speed_adjusted_runtime`) dynamically showing actual viewing hours and hours saved across 1.0x to 2.5x speeds.
+- Add Manga Chapter Sync / Anime-to-Manga Bridge (`MANGA_ANIME_SYNC_MAP`, `get_manga_chapter_sync`) estimating exact source manga chapters corresponding to current anime episodes (*Frieren*, *JJK*, *Demon Slayer*, *Chainsaw Man*, *One Piece*).
+- Add Watchlist Decay & Stagnation Auditor (`audit_watchlist_decay`) identifying forgotten backlog entries dormant for >180 days with total backlog recovery hours.
+- Add Ambient Anime Lo-Fi Radio Player (`ANIME_LOFI_STREAMS`, `render_lofi_player_html`) embedding aesthetic lo-fi streams directly into the command centre.
+- Add Dynamic Trailer Theater Embed Modal (`generate_trailer_theater_embed`) supporting responsive YouTube and AniList preview embeds.
+- Add Anime Poster Wallpaper Generator (`generate_wallpaper_poster_svg`) producing high-definition 1080p and 4K vector SVG poster wallpapers with community ratings and studio marks.
+- Add Character Quote of the Day (`CHARACTER_QUOTES`, `get_character_quote`) delivering iconic anime quotes on daily cycles.
+- Add Story Arc Progression Visualizer (`FRANCHISE_ARCS`, `generate_arc_progression_data`) tracking milestone arcs and chapter ranges for major anime series.
+- Add Multi-Axis Anime Genre Radar Chart (`GLOBAL_GENRE_BENCHMARKS`, `calculate_genre_radar_metrics`) benchmarking personal library preferences against global anime community averages.
+- Add Watchtime Milestones & Real-World Equivalents (`TIME_EQUIVALENCE_RATES`, `calculate_time_equivalence_milestones`) visualizing viewing hours as international flights, classic literature reads, and Earth orbits.
+- Add Voice Actor (Seiyuu) Network Graph (`build_voice_actor_network`) mapping co-star relationships and shared titles across voice casts.
+- Add Headless API / Lightweight JSON Mode (`handle_headless_request`) providing REST-like JSON endpoints (`/api/v1/health`, `/api/v1/watchlist`, `/api/v1/stats`, `/api/v1/progress/increment`) for headless scripting.
+- Add Automated Visual Regression & Glassmorphism Contract Verification (`verify_visual_glassmorphism_contract`, `tests/test_visual_regression.py`) guaranteeing backdrop-blur, radius, and glow token integrity.
+- Add Cloud Storage Sync Payloads (`prepare_s3_backup_payload`) formatting atomic backups for AWS S3 and Cloudflare R2 bucket distribution.
+- Add Offline IndexedDB Mirror Generator (`generate_indexeddb_mirror_js`) generating client-side JavaScript mirroring SQLite libraries into browser IndexedDB storage for progressive web apps.
+
 ## 1.9.0
 
 - Add Curated Filler Guides & Canon Detection (`FILLER_GUIDES`, `get_filler_guide`, `is_episode_filler`, `get_next_canon_episode`) for classic long-running anime (*Naruto*, *Bleach*, *One Piece*, *Gintama*, *DBZ*).
