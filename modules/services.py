@@ -9,7 +9,7 @@ import re
 import time
 from datetime import date, datetime, timedelta
 from typing import Any
-from urllib.parse import quote, urlparse
+from urllib.parse import parse_qs, quote, urlparse
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from modules.config import (
@@ -1891,13 +1891,20 @@ def render_lofi_player_html(stream_index: int = 0) -> str:
 
 
 def generate_trailer_theater_embed(trailer_url: str, title: str = "Anime") -> str:
-    if "youtube.com" in trailer_url or "youtu.be" in trailer_url:
+    parsed = urlparse(trailer_url)
+    hostname = (parsed.hostname or "").lower()
+    if hostname in {"www.youtube.com", "youtube.com", "m.youtube.com", "youtu.be"} or hostname.endswith(".youtube.com"):
         vid_id = ""
-        if "watch?v=" in trailer_url:
-            vid_id = trailer_url.split("watch?v=")[-1].split("&")[0]
-        elif "youtu.be/" in trailer_url:
-            vid_id = trailer_url.split("youtu.be/")[-1].split("?")[0]
-        if vid_id:
+        if "watch" in parsed.path:
+            query = parse_qs(parsed.query)
+            if "v" in query and query["v"]:
+                vid_id = query["v"][0]
+        elif hostname == "youtu.be":
+            vid_id = parsed.path.lstrip("/").split("/")[0]
+        elif "/embed/" in parsed.path:
+            vid_id = parsed.path.split("/embed/")[-1].split("/")[0]
+
+        if vid_id and re.match(r"^[A-Za-z0-9_-]{6,15}$", vid_id):
             embed_url = f"https://www.youtube.com/embed/{vid_id}?autoplay=1&mute=0"
             return f"""<div style="border-radius:20px;overflow:hidden;border:1px solid rgba(244,184,255,0.3);box-shadow:0 12px 36px rgba(0,0,0,0.5);">
   <iframe width="100%" height="450" src="{embed_url}" title="{title} Trailer" frameborder="0" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture" allowfullscreen></iframe>
