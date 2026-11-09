@@ -1,5 +1,5 @@
 # Streamlit 1.50+ uses Array.prototype.toSorted in the browser bundle, which
 # breaks on older Android browsers with "Object.keys(...).toSorted is not a function".
-streamlit[auth]>=1.49,<1.50
+streamlit[auth]>=1.67.0,<1.68
 requests>=2.34.2,<3
 typing-extensions>=4.12.0
